@@ -1,0 +1,20 @@
+# Swift Package Manager & Xcode
+.build/
+.swiftpm/
+Packages/
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# Packaged macOS App Bundles & Binaries
+*.app/
+*.dSYM.zip
+*.dSYM
+
+# macOS & Local State / Credentials (Never commit!)
+.DS_Store
+.session.json
+state.json
+sync.log
+*.plist
