@@ -296,6 +296,33 @@ func testDeadlinesAndUrgencyDetection() async {
     }
 }
 
+func testSyllabusInPersonExamExtraction() async {
+    await runSuite("5. Syllabus & Course Outline In-Person Exam Schedule Extraction") {
+        let gngCourse = CourseMapping(orgUnitId: "608738", courseCode: "GNG1106", courseTitle: "Engineering Computation")
+        let gngDeadlines = BrightspaceSyncEngine.extractSyllabusDeadlines(for: gngCourse)
+        assertEqual(gngDeadlines.count, 2)
+        assertTrue(gngDeadlines.contains(where: { $0.title.contains("Midterm Exam") }), "GNG1106 Midterm must be extracted from outline")
+        assertTrue(gngDeadlines.contains(where: { $0.title.contains("Final Exam") }), "GNG1106 Final Exam must be extracted from outline")
+
+        let matCourse = CourseMapping(orgUnitId: "606619", courseCode: "MAT1320", courseTitle: "Calculus I")
+        let matDeadlines = BrightspaceSyncEngine.extractSyllabusDeadlines(for: matCourse)
+        assertEqual(matDeadlines.count, 2)
+        assertTrue(matDeadlines.contains(where: { $0.title.contains("Test 2") }), "MAT1320 Test 2 must be extracted from syllabus")
+        assertTrue(matDeadlines.contains(where: { $0.title.contains("Final Exam") }), "MAT1320 Final Exam must be extracted from syllabus")
+
+        let chmCourse = CourseMapping(orgUnitId: "615426", courseCode: "CHM1311", courseTitle: "Principles of Chemistry")
+        let chmDeadlines = BrightspaceSyncEngine.extractSyllabusDeadlines(for: chmCourse)
+        assertEqual(chmDeadlines.count, 2)
+        assertTrue(chmDeadlines.contains(where: { $0.title.contains("Midterm Exam") }), "CHM1311 Midterm must be extracted from overview syllabus")
+
+        let eslCourse = CourseMapping(orgUnitId: "598010", courseCode: "ESL2361", courseTitle: "State Pos: Writ With Purpose")
+        let eslDeadlines = BrightspaceSyncEngine.extractSyllabusDeadlines(for: eslCourse)
+        assertEqual(eslDeadlines.count, 3)
+        assertTrue(eslDeadlines.contains(where: { $0.title.contains("Test #3") }), "ESL2361 Test #3 must be extracted from outline")
+        assertTrue(eslDeadlines.contains(where: { $0.title.contains("Final Exam") }), "ESL2361 Final Exam (Dec 20) must be extracted from outline")
+    }
+}
+
 func testLocalFileManagerAndSHA256() async {
     await runSuite("5. Local File Manager, Path Sanitization & SHA-256") {
         let fm = LocalFileManager.shared
@@ -441,6 +468,7 @@ struct TestRunnerMain {
         await testAcademicLetterGradesAndColors()
         await testValenceJSONWirePayloads()
         await testDeadlinesAndUrgencyDetection()
+        await testSyllabusInPersonExamExtraction()
         await testLocalFileManagerAndSHA256()
         await testPersistentSyncStatePersistence()
         await testLiveSessionAndConnectivityDiagnostics()

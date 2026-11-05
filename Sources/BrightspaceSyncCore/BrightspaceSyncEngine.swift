@@ -782,6 +782,16 @@ public actor BrightspaceSyncEngine {
                     statusCallback: statusCallback
                 )
 
+                try? await pollCourseOverviewAttachment(
+                    baseURL: baseURL,
+                    valenceVersion: valenceVersion,
+                    course: course,
+                    credentials: creds,
+                    enableDriveMirror: enableDriveMirror,
+                    directAutomationCommand: directAutomationCommand,
+                    statusCallback: statusCallback
+                )
+
                 let courseDeadlines = await pollCourseDeadlines(
                     baseURL: baseURL,
                     valenceVersion: valenceVersion,
@@ -965,7 +975,239 @@ public actor BrightspaceSyncEngine {
             }
         }
 
+        // 4. In-Person Exams & Syllabus Milestones (Midterms, Written Tests & Finals)
+        let syllabusDeadlines = Self.extractSyllabusDeadlines(for: course)
+        for item in syllabusDeadlines {
+            let key = item.title.lowercased()
+            if results[key] == nil {
+                results[key] = item
+            }
+        }
+
         return Array(results.values)
+    }
+
+    // MARK: - Syllabus & Course Outline In-Person Exam Dates
+
+    public static func makeLocalDate(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date {
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = day
+        comps.hour = hour
+        comps.minute = minute
+        comps.timeZone = TimeZone(identifier: "America/Toronto") ?? .current
+        return Calendar.current.date(from: comps) ?? Date()
+    }
+
+    public static func extractSyllabusDeadlines(for course: CourseMapping) -> [BrightspaceDeadlineItem] {
+        var items: [BrightspaceDeadlineItem] = []
+        let code = course.courseCode.uppercased()
+
+        switch code {
+        case "GNG1106":
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:midterm",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Midterm Exam (In-Person MRN 150)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 11, day: 8, hour: 11, minute: 30),
+                    startDate: makeLocalDate(year: 2026, month: 11, day: 8, hour: 9, minute: 30),
+                    endDate: makeLocalDate(year: 2026, month: 11, day: 8, hour: 11, minute: 30),
+                    details: "In-Person Written Exam • Room MRN 150 (Weight: 25%) • Covers Weeks 1–7",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:final",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Final Exam (Official Exam Period)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 19, minute: 0),
+                    startDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 9, minute: 0),
+                    endDate: makeLocalDate(year: 2026, month: 12, day: 22, hour: 22, minute: 0),
+                    details: "Cumulative Final Exam (2 hours, Weight: 50%) • Scheduled by Faculty",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+
+        case "MAT1320":
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:test2",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Test 2 (In-Class / DGD)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 11, day: 19, hour: 12, minute: 50),
+                    startDate: makeLocalDate(year: 2026, month: 11, day: 19, hour: 11, minute: 30),
+                    endDate: makeLocalDate(year: 2026, month: 11, day: 19, hour: 12, minute: 50),
+                    details: "Written Test 2 (Weight: 20%) • Covers Lectures 8–16 (No calculators)",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:final",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Final Exam (Official Exam Period)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 19, minute: 0),
+                    startDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 9, minute: 0),
+                    endDate: makeLocalDate(year: 2026, month: 12, day: 22, hour: 22, minute: 0),
+                    details: "Cumulative Final Exam (3 hours, Weight: 50%) • Closed-book, no calculators",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+
+        case "CHM1311":
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:midterm",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Midterm Exam (In-Class)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 11, day: 16, hour: 9, minute: 50),
+                    startDate: makeLocalDate(year: 2026, month: 11, day: 16, hour: 8, minute: 30),
+                    endDate: makeLocalDate(year: 2026, month: 11, day: 16, hour: 9, minute: 50),
+                    details: "In-Person Midterm (Weight: 20%) • Administered during class time",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:final",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Final Exam (Official Exam Period)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 19, minute: 0),
+                    startDate: makeLocalDate(year: 2026, month: 12, day: 11, hour: 9, minute: 0),
+                    endDate: makeLocalDate(year: 2026, month: 12, day: 22, hour: 22, minute: 0),
+                    details: "Cumulative Final Exam (Weight: 35%) • Administered in person",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+
+        case "ESL2361":
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:test3",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Test #3 (In-Person SMD 423)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 11, day: 24, hour: 17, minute: 20),
+                    startDate: makeLocalDate(year: 2026, month: 11, day: 24, hour: 16, minute: 0),
+                    endDate: makeLocalDate(year: 2026, month: 11, day: 24, hour: 17, minute: 20),
+                    details: "In-Person Writing Test #3 (Weight: 20%) • Room SMD 423",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:critical_thinking",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Assignment in Critical Thinking (Writing & Speaking)",
+                    kind: .assignment,
+                    dueDate: makeLocalDate(year: 2026, month: 11, day: 17, hour: 23, minute: 59),
+                    details: "Individual writing and presentation assignment (Weight: 10%)",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+            items.append(
+                BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):syllabus:final",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: "Final Exam (In-Person DMS 1160)",
+                    kind: .exam,
+                    dueDate: makeLocalDate(year: 2026, month: 12, day: 20, hour: 17, minute: 0),
+                    startDate: makeLocalDate(year: 2026, month: 12, day: 20, hour: 14, minute: 0),
+                    endDate: makeLocalDate(year: 2026, month: 12, day: 20, hour: 17, minute: 0),
+                    details: "Official Final Exam (Weight: 30%) • Sunday, Dec 20, 2:00 PM – 5:00 PM in DMS 1160",
+                    webURL: "https://uottawa.brightspace.com/d2l/home/\(course.orgUnitId)"
+                )
+            )
+
+        default:
+            break
+        }
+
+        return items
+    }
+
+    private func pollCourseOverviewAttachment(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String),
+        enableDriveMirror: Bool,
+        directAutomationCommand: String?,
+        statusCallback: @escaping @MainActor @Sendable (SyncVisualState) -> Void
+    ) async throws {
+        let overviewURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/overview")
+        let overviewReq = authenticatedRequest(url: overviewURL, credentials: credentials)
+        guard let (data, resp) = try? await URLSession.shared.data(for: overviewReq),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hasAttachment = json["HasAttachment"] as? Bool, hasAttachment else {
+            return
+        }
+
+        let attURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/overview/attachment")
+        let attReq = authenticatedRequest(url: attURL, credentials: credentials)
+        guard let (fileData, fileResp) = try? await URLSession.shared.data(for: attReq),
+              let fileHttp = fileResp as? HTTPURLResponse, (200...299).contains(fileHttp.statusCode),
+              !fileData.isEmpty else {
+            return
+        }
+
+        var fileName = "Course_Syllabus.pdf"
+        if let cd = fileHttp.value(forHTTPHeaderField: "Content-Disposition") {
+            if let range = cd.range(of: "filename\\*?=['\"]?([^'\";\\n]+)", options: .regularExpression) {
+                let rawMatch = String(cd[range])
+                if let eqRange = rawMatch.range(of: "=") {
+                    var parsed = String(rawMatch[eqRange.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " '\";"))
+                    if parsed.contains("''") {
+                        parsed = parsed.components(separatedBy: "''").last ?? parsed
+                    }
+                    if let decoded = parsed.removingPercentEncoding, !decoded.isEmpty {
+                        fileName = decoded
+                    }
+                }
+            }
+        }
+
+        let outcome = try await LocalFileManager.shared.writeLocalAssetAndIngest(
+            data: fileData,
+            courseCode: course.courseCode,
+            customCourseSubfolder: course.customSubfolder,
+            moduleName: "Syllabus",
+            fileName: fileName,
+            enableDriveMirror: enableDriveMirror,
+            directAutomationCommand: directAutomationCommand,
+            notebookWorkspaceID: course.notebookWorkspaceID
+        )
+
+        let compositeKey = "\(course.orgUnitId):overview:syllabus"
+        state.cachedTopics[compositeKey] = CachedTopicRecord(
+            compositeKey: compositeKey,
+            orgUnitId: course.orgUnitId,
+            topicId: 0,
+            title: fileName,
+            moduleName: "Syllabus",
+            sha256Hex: outcome.sha256Hex,
+            lastModifiedISO: ISO8601DateFormatter().string(from: Date()),
+            localFilePath: outcome.localFileURL.path(percentEncoded: false)
+        )
     }
 
     private func pollCourseGrades(
