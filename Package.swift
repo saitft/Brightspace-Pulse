@@ -7,12 +7,14 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "BrightspaceSync", targets: ["BrightspaceSync"])
+        .executable(name: "BrightspaceSync", targets: ["BrightspaceSync"]),
+        .executable(name: "BrightspaceSyncTests", targets: ["BrightspaceSyncTests"]),
+        .library(name: "BrightspaceSyncCore", targets: ["BrightspaceSyncCore"])
     ],
     targets: [
-        .executableTarget(
-            name: "BrightspaceSync",
-            path: "Sources/BrightspaceSync",
+        .target(
+            name: "BrightspaceSyncCore",
+            path: "Sources/BrightspaceSyncCore",
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("SwiftUI"),
@@ -21,6 +23,25 @@ let package = Package(
                 .linkedFramework("UserNotifications"),
                 .linkedFramework("CryptoKit")
             ]
+        ),
+        .executableTarget(
+            name: "BrightspaceSync",
+            dependencies: [
+                "BrightspaceSyncCore"
+            ],
+            path: "Sources/BrightspaceSync",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("WebKit")
+            ]
+        ),
+        .executableTarget(
+            name: "BrightspaceSyncTests",
+            dependencies: [
+                "BrightspaceSyncCore"
+            ],
+            path: "Tests/BrightspaceSyncTests"
         )
     ]
 )

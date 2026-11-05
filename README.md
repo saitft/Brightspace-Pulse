@@ -1,19 +1,24 @@
 # Brightspace Pulse (BrightspaceSync)
 
-A native, lightweight macOS utility (macOS 14+ Sonoma / macOS 15+ Sequoia / macOS 26+ Tahoe) built with **SwiftUI** and **AppKit** that automatically discovers your enrolled **Brightspace (D2L)** courses, downloads new lecture slides, lab manuals, and class announcements into structured local folders, and mirrors them into a **Google Drive / NotebookLM** source directory.
+A native, high-performance macOS academic hub and menu bar utility (macOS 14+ Sonoma / macOS 15+ Sequoia / macOS 26+ Tahoe) built with **SwiftUI** and **AppKit** that brings your entire **Brightspace (D2L)** experience directly to your desktop.
+
+Brightspace Pulse synchronizes upcoming assignments, quizzes, exams, released grades, lecture slides, lab manuals, and class announcements into structured local folders, and mirrors assets into a **Google Drive / NotebookLM** source directory.
 
 ---
 
 ## Key Features
 
-- **Liquid Glass Native macOS Design:**
-  - Built with `NSVisualEffectView` (`.behindWindow` / `.popover` materials) and SwiftUI `.ultraThinMaterial`, `1px` specular refraction borders, and ambient shadows.
-  - Operates on-demand when launched (auto-syncs on open and terminates cleanly on window close with `0%` idle background CPU/RAM) alongside a live menu bar status item.
+- **Native macOS Liquid Glass Desktop Hub:**
+  - Designed with `NSVisualEffectView` (`.behindWindow` / `.popover` materials), SwiftUI `.ultraThinMaterial`, `1px` luminous specular borders, and soft ambient drop shadows.
+  - **Upcoming & Exams:** Real-time countdowns for all pending assignments, quizzes, and exams with 48-hour crunch alerts and direct web links.
+  - **Course Files Browser:** Instant search and indexing across 290+ downloaded PDFs, slides, and lab code with one-click Open or Reveal in Finder.
+  - **Grades & Standing Dashboard:** Categorized grade tables, weighted averages, letter grades (`A+` to `F`), and visual progress indicators.
+  - Operates on-demand when launched (syncs automatically and quits cleanly with `0%` idle background CPU/RAM) alongside a live menu bar status popover.
 - **Zero-Config Brightspace Course Discovery:**
-  - Integrated `WKWebView` Single Sign-On (SSO) sheet captures `d2lSessionVal` and `d2lSecureSessionVal` automatically.
+  - Integrated `WKWebView` Single Sign-On (SSO) sheet captures `d2lSessionVal` and `d2lSecureSessionVal` automatically with silent cookie refresh.
   - Queries `/d2l/api/lp/1.43/enrollments/myenrollments/` to auto-discover all active course offerings (`orgUnitId`, course code, and title).
-- **Recursive Content & Announcement Sync + SHA-256 Deduplication:**
-  - Traverses `/d2l/api/le/{version}/{orgUnitId}/content/toc`, `/content/root/`, and `/news/` across Valence API versions (`1.67` → `1.60` → `1.51` → `1.43`).
+- **Valence REST Engine & SHA-256 Deduplication:**
+  - Traverses `/content/toc`, `/news/`, `/dropbox/folders/`, paginated `/quizzes/`, `/calendar/events/`, and `/grades/values/myGradeValues/`.
   - Streams files directly to `<TargetFolder>/<CourseCode>/<ModuleName>/<FileName>` using `URLSession` and verifies `CryptoKit.SHA256` digests against a persistent local cache (`state.json`) to eliminate redundant downloads.
 - **NotebookLM & Google Drive Ingestion Pipeline:**
   - **Route A (Local Drive Mirror):** Automatically copies verified course assets into `<DriveMirror>/<CourseCode>_Notebook/` and maintains a Markdown index (`00_<CourseCode>_NotebookLM_Index.md`) for instant `@Google Drive` Gemini queries or one-step NotebookLM uploads.
@@ -27,12 +32,19 @@ A native, lightweight macOS utility (macOS 14+ Sonoma / macOS 15+ Sequoia / macO
 BrightspaceSync/
 ├── Package.swift
 ├── bundle_app.sh
+├── run_tests.sh
 ├── notebook_ingest.sh
-└── Sources/BrightspaceSync/
-    ├── AppMain.swift               # App entry point, on-demand window, MenuBarExtra, Settings & WKWebView SSO
-    ├── GlassComponents.swift       # Reusable Liquid Glass cards, vibrancy wrappers, and glow status badges
-    ├── BrightspaceSyncEngine.swift # Swift Actor for Valence REST polling, course discovery, and SHA-256 state cache
-    └── LocalFileManager.swift      # Security-scoped bookmarks, streaming SHA-256 downloader, and NotebookLM mirror
+├── Sources/
+│   ├── BrightspaceSync/
+│   │   └── AppMain.swift               # App entry point, Desktop Workspace, MenuBarExtra & SSO Sheet
+│   └── BrightspaceSyncCore/
+│       ├── AppViewModel.swift          # Main-actor observable coordinator & academic helpers
+│       ├── BrightspaceSyncEngine.swift # Valence REST polling actor, auth verification & state cache
+│       ├── GlassComponents.swift       # Liquid Glass modifiers, status badges & visual styling
+│       └── LocalFileManager.swift      # File downloads, SHA-256 hashing & local folder scanner
+└── Tests/
+    └── BrightspaceSyncTests/
+        └── main.swift                  # Comprehensive unit & integration test runner (7 test suites)
 ```
 
 ---
@@ -43,19 +55,19 @@ BrightspaceSync/
 - macOS 14.0 (Sonoma) or newer
 - Xcode Command Line Tools (`xcode-select --install`, Swift 5.10 / Swift 6+)
 
+### Run Test Suite
+```bash
+./run_tests.sh
+# or
+swift run BrightspaceSyncTests
+```
+
 ### Build & Package `.app` Bundle
 ```bash
-git clone https://github.com/saitft/Brightspace-Pulse.git
-cd Brightspace-Pulse
-chmod +x bundle_app.sh
+chmod +x bundle_app.sh run_tests.sh
 ./bundle_app.sh
 open BrightspaceSync.app
 ```
-
-### Usage
-1. Launch **`Brightspace Pulse.app`**.
-3. Click the **Gear icon (`⚙️`)** → **Sign In via WebView** and log in to your university's Brightspace instance (e.g. `https://brightspace.example.edu`).
-4. Your enrolled courses are discovered automatically and synced into your chosen root folder and NotebookLM mirror folder.
 
 ---
 

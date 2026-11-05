@@ -40,6 +40,28 @@ public struct CachedTopicRecord: Codable, Sendable {
     public let lastModifiedISO: String?
     public let localFilePath: String
     public let syncedAt: Date
+
+    public init(
+        compositeKey: String,
+        orgUnitId: String,
+        topicId: Int,
+        title: String,
+        moduleName: String,
+        sha256Hex: String,
+        lastModifiedISO: String?,
+        localFilePath: String,
+        syncedAt: Date = Date()
+    ) {
+        self.compositeKey = compositeKey
+        self.orgUnitId = orgUnitId
+        self.topicId = topicId
+        self.title = title
+        self.moduleName = moduleName
+        self.sha256Hex = sha256Hex
+        self.lastModifiedISO = lastModifiedISO
+        self.localFilePath = localFilePath
+        self.syncedAt = syncedAt
+    }
 }
 
 public struct SyncActivityItem: Identifiable, Codable, Equatable, Sendable {
