@@ -453,6 +453,35 @@ func testLiveSessionAndConnectivityDiagnostics() async {
     }
 }
 
+func testInstantStartupAndParallelSync() async {
+    await runSuite("8. Instant Startup Hydration & Parallel Sync Concurrency") {
+        let t0 = Date()
+        let cached = BrightspaceSyncEngine.loadCachedStateSynchronously()
+        let loadDurationMs = Date().timeIntervalSince(t0) * 1000
+        print("  ℹ loadCachedStateSynchronously() completed in \(String(format: "%.2f", loadDurationMs))ms")
+        assertTrue(loadDurationMs < 50.0, "Synchronous cache hydration must complete in under 50ms for instant 0ms startup")
+        assertTrue(!cached.cachedTopics.isEmpty, "Cached topics must be loaded from state.json")
+
+        // Test parallel polling engine execution
+        let engine = BrightspaceSyncEngine()
+        let sampleCourses = [
+            CourseMapping(orgUnitId: "608738", courseCode: "GNG1106", courseTitle: "Engineering Computation"),
+            CourseMapping(orgUnitId: "606619", courseCode: "MAT1320", courseTitle: "Calculus I")
+        ]
+
+        let syncStart = Date()
+        _ = await engine.pollCourses(
+            baseURLString: "https://uottawa.brightspace.com",
+            courses: sampleCourses,
+            enableDriveMirror: false,
+            directAutomationCommand: nil
+        ) { _ in }
+        let syncDurationMs = Date().timeIntervalSince(syncStart) * 1000
+        print("  ℹ Parallel pollCourses for 2 courses completed in \(String(format: "%.0f", syncDurationMs))ms")
+        assertTrue(syncDurationMs < 5000.0, "Parallel polling for multiple courses must finish rapidly under 5s")
+    }
+}
+
 // MARK: - Test Runner Entry Point
 
 @main
@@ -472,6 +501,7 @@ struct TestRunnerMain {
         await testLocalFileManagerAndSHA256()
         await testPersistentSyncStatePersistence()
         await testLiveSessionAndConnectivityDiagnostics()
+        await testInstantStartupAndParallelSync()
 
         let totalDuration = String(format: "%.3fs", Date().timeIntervalSince(startTime))
 

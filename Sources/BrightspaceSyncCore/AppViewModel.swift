@@ -133,21 +133,23 @@ public final class AppViewModel: ObservableObject {
             ]
         }
 
+        // 1. Instant Synchronous Cache Hydration (0ms Startup Latency)
+        let persisted = BrightspaceSyncEngine.loadCachedStateSynchronously()
+        self.lastSyncDate = persisted.lastSuccessfulSync
+        self.deadlines = persisted.deadlines
+        self.grades = persisted.grades
+        if persisted.recentActivity.isEmpty {
+            self.activities = Self.defaultSeedActivities(rootPath: self.rootDirectoryPath)
+        } else {
+            self.activities = persisted.recentActivity
+        }
+
+        // 2. Scan Local Files Asynchronously (Non-blocking)
         refreshLocalFilesIndex()
 
-        Task { @MainActor in
-            let persisted = await engine.currentState()
-            self.lastSyncDate = persisted.lastSuccessfulSync
-            self.deadlines = persisted.deadlines
-            self.grades = persisted.grades
-            if persisted.recentActivity.isEmpty {
-                self.activities = Self.defaultSeedActivities(rootPath: self.rootDirectoryPath)
-            } else {
-                self.activities = persisted.recentActivity
-            }
-
-            await engine.stopSchedule()
-            self.triggerManualSync()
+        // 3. Detached Non-blocking Background Sync
+        Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.triggerManualSync()
         }
     }
 
@@ -189,6 +191,28 @@ public final class AppViewModel: ObservableObject {
         if purgeExistingD2L {
             await purgeStaleD2LCookies()
         }
+
+        // 1. Fast-path: query existing persistent cookie store directly without spinning up WKWebView (<5ms)
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            store.getAllCookies { continuation.resume(returning: $0) }
+        }
+        var s1: String?
+        var s2: String?
+        var pairs: [String] = []
+        for cookie in cookies where cookie.domain.localizedCaseInsensitiveContains("brightspace") {
+            pairs.append("\(cookie.name)=\(cookie.value)")
+            if cookie.name == "d2lSessionVal" && !cookie.value.isEmpty {
+                s1 = cookie.value
+            } else if cookie.name == "d2lSecureSessionVal" && !cookie.value.isEmpty {
+                s2 = cookie.value
+            }
+        }
+        if let v1 = s1, let v2 = s2 {
+            return (v1, v2, pairs.joined(separator: "; "))
+        }
+
+        // 2. Slow-path fallback: if cookies were not present in store, load a lightweight webview
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: config)
@@ -199,33 +223,27 @@ public final class AppViewModel: ObservableObject {
         if let url = URL(string: targetURLString) {
             wv.load(URLRequest(url: url))
         }
-        try? await Task.sleep(for: .milliseconds(3500))
 
-        let finalPath = wv.url?.path.lowercased() ?? ""
-        if finalPath.contains("login") {
-            return nil
-        }
-
-        return await withCheckedContinuation { continuation in
-            wv.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                var s1: String?
-                var s2: String?
-                var pairs: [String] = []
-                for cookie in cookies where cookie.domain.localizedCaseInsensitiveContains("brightspace") {
-                    pairs.append("\(cookie.name)=\(cookie.value)")
-                    if cookie.name == "d2lSessionVal" && !cookie.value.isEmpty {
-                        s1 = cookie.value
-                    } else if cookie.name == "d2lSecureSessionVal" && !cookie.value.isEmpty {
-                        s2 = cookie.value
-                    }
-                }
-                if let v1 = s1, let v2 = s2 {
-                    continuation.resume(returning: (v1, v2, pairs.joined(separator: "; ")))
-                } else {
-                    continuation.resume(returning: nil)
-                }
+        // Poll for up to 1.5 seconds in 100ms intervals (returns the millisecond cookies appear)
+        for _ in 0..<15 {
+            try? await Task.sleep(for: .milliseconds(100))
+            let currentCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+                wv.configuration.websiteDataStore.httpCookieStore.getAllCookies { continuation.resume(returning: $0) }
+            }
+            var slowS1: String?
+            var slowS2: String?
+            var slowPairs: [String] = []
+            for c in currentCookies where c.domain.localizedCaseInsensitiveContains("brightspace") {
+                slowPairs.append("\(c.name)=\(c.value)")
+                if c.name == "d2lSessionVal" && !c.value.isEmpty { slowS1 = c.value }
+                else if c.name == "d2lSecureSessionVal" && !c.value.isEmpty { slowS2 = c.value }
+            }
+            if let v1 = slowS1, let v2 = slowS2 {
+                return (v1, v2, slowPairs.joined(separator: "; "))
             }
         }
+
+        return nil
     }
 
     // MARK: - Filtered Collections for Each Workspace Section
@@ -377,7 +395,7 @@ public final class AppViewModel: ObservableObject {
             }
 
             if !isSessionAlive {
-                if let recovered = await self.hydrateFromWebKitCookieStore(purgeExistingD2L: true) {
+                if let recovered = await self.hydrateFromWebKitCookieStore(purgeExistingD2L: false) {
                     await engine.saveCredentials(
                         d2lSessionVal: recovered.s1,
                         d2lSecureSessionVal: recovered.s2,

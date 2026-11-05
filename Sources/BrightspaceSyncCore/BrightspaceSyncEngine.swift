@@ -466,14 +466,26 @@ public enum KeychainStore {
         }
         lock.unlock()
 
-        if let localVal = readFallbackDict()[account] {
+        let dict = readFallbackDict()
+        if let localVal = dict[account], !localVal.isEmpty {
             lock.lock()
             memoryCache[account] = localVal
             lock.unlock()
-            return localVal.isEmpty ? nil : localVal
+            return localVal
         }
 
-        // Never block on SecItemCopyMatching across ad-hoc rebuilds; rely on .session.json + WebKit cookie store
+        // Support key variants: stripped prefix or brightspace.valence prefix
+        let stripped = account.replacingOccurrences(of: "brightspace.valence.", with: "")
+        let withPrefix = "brightspace.valence.\(account)"
+        for candidate in [stripped, withPrefix] {
+            if let val = dict[candidate], !val.isEmpty {
+                lock.lock()
+                memoryCache[account] = val
+                lock.unlock()
+                return val
+            }
+        }
+
         return nil
     }
 
@@ -504,6 +516,28 @@ public actor BrightspaceSyncEngine {
     private var state: PersistentSyncState
     private var pollingTask: Task<Void, Never>?
     private var isCurrentlySyncing: Bool = false
+
+    private let urlSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 16
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 30
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .useProtocolCachePolicy
+        return URLSession(configuration: config)
+    }()
+
+    public static func loadCachedStateSynchronously() -> PersistentSyncState {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return PersistentSyncState()
+        }
+        let stateFileURL = appSupport.appendingPathComponent("BrightspaceSync/state.json", isDirectory: false)
+        if let data = try? Data(contentsOf: stateFileURL),
+           let decoded = try? JSONDecoder().decode(PersistentSyncState.self, from: data) {
+            return decoded
+        }
+        return PersistentSyncState()
+    }
 
     public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -585,7 +619,7 @@ public actor BrightspaceSyncEngine {
         for ver in ["1.43", "1.35", "1.28"] {
             let whoamiURL = baseURL.appending(path: "/d2l/api/lp/\(ver)/users/whoami")
             let req = authenticatedRequest(url: whoamiURL, credentials: creds)
-            if let (_, resp) = try? await URLSession.shared.data(for: req),
+            if let (_, resp) = try? await urlSession.data(for: req),
                let http = resp as? HTTPURLResponse {
                 if (200...299).contains(http.statusCode) {
                     return true
@@ -622,7 +656,7 @@ public actor BrightspaceSyncEngine {
             guard let endpoint = components.url else { continue }
 
             let req = authenticatedRequest(url: endpoint, credentials: creds)
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+            guard let (data, resp) = try? await urlSession.data(for: req),
                   let http = resp as? HTTPURLResponse,
                   (200...299).contains(http.statusCode),
                   let paged = try? JSONDecoder().decode(ValenceEnrollmentPagedResult.self, from: data),
@@ -725,6 +759,13 @@ public actor BrightspaceSyncEngine {
 
     // MARK: - Brightspace Valence REST Polling Pipeline
 
+    private struct SingleCourseSyncResult: Sendable {
+        let course: CourseMapping
+        let deadlines: [BrightspaceDeadlineItem]
+        let grades: [BrightspaceGradeItem]
+        let success: Bool
+    }
+
     public func pollCourses(
         baseURLString: String,
         valenceVersion: String = "1.67",
@@ -756,65 +797,48 @@ public actor BrightspaceSyncEngine {
             return state.recentActivity
         }
 
+        let activeCourses = courses.filter(\.isEnabled)
+        guard !activeCourses.isEmpty else {
+            await statusCallback(.synced)
+            return state.recentActivity
+        }
+
+        let syncStart = Date()
+        appendLog("[SyncEngine] ⚡️ Launching parallel sync for \(activeCourses.count) courses...")
+
+        let courseResults = await withTaskGroup(of: SingleCourseSyncResult.self) { group in
+            for course in activeCourses {
+                group.addTask {
+                    await self.pollSingleCourse(
+                        baseURL: baseURL,
+                        valenceVersion: valenceVersion,
+                        course: course,
+                        credentials: creds,
+                        enableDriveMirror: enableDriveMirror,
+                        directAutomationCommand: directAutomationCommand,
+                        statusCallback: statusCallback
+                    )
+                }
+            }
+
+            var outputs: [SingleCourseSyncResult] = []
+            for await res in group {
+                outputs.append(res)
+            }
+            return outputs
+        }
+
         var succeededCourseCount = 0
         var collectedDeadlines: [BrightspaceDeadlineItem] = []
         var collectedGrades: [BrightspaceGradeItem] = []
 
-        for course in courses where course.isEnabled {
-            do {
-                try await pollCourseContentRoot(
-                    baseURL: baseURL,
-                    valenceVersion: valenceVersion,
-                    course: course,
-                    credentials: creds,
-                    enableDriveMirror: enableDriveMirror,
-                    directAutomationCommand: directAutomationCommand,
-                    statusCallback: statusCallback
-                )
-
-                try await pollCourseAnnouncements(
-                    baseURL: baseURL,
-                    valenceVersion: valenceVersion,
-                    course: course,
-                    credentials: creds,
-                    enableDriveMirror: enableDriveMirror,
-                    directAutomationCommand: directAutomationCommand,
-                    statusCallback: statusCallback
-                )
-
-                try? await pollCourseOverviewAttachment(
-                    baseURL: baseURL,
-                    valenceVersion: valenceVersion,
-                    course: course,
-                    credentials: creds,
-                    enableDriveMirror: enableDriveMirror,
-                    directAutomationCommand: directAutomationCommand,
-                    statusCallback: statusCallback
-                )
-
-                let courseDeadlines = await pollCourseDeadlines(
-                    baseURL: baseURL,
-                    valenceVersion: valenceVersion,
-                    course: course,
-                    credentials: creds
-                )
-                collectedDeadlines.append(contentsOf: courseDeadlines)
-
-                let courseGrades = await pollCourseGrades(
-                    baseURL: baseURL,
-                    valenceVersion: valenceVersion,
-                    course: course,
-                    credentials: creds
-                )
-                collectedGrades.append(contentsOf: courseGrades)
-
-                succeededCourseCount += 1
-            } catch {
-                continue
-            }
+        for res in courseResults {
+            collectedDeadlines.append(contentsOf: res.deadlines)
+            collectedGrades.append(contentsOf: res.grades)
+            if res.success { succeededCourseCount += 1 }
         }
 
-        if succeededCourseCount == 0 && !courses.filter(\.isEnabled).isEmpty {
+        if succeededCourseCount == 0 && !activeCourses.isEmpty {
             await statusCallback(.authRequired)
             return state.recentActivity
         }
@@ -827,8 +851,81 @@ public actor BrightspaceSyncEngine {
         }
         state.lastSuccessfulSync = Date()
         persistState()
+
+        let elapsedMs = Int(Date().timeIntervalSince(syncStart) * 1000)
+        appendLog("[SyncEngine] ⚡️ Parallel sync completed in \(elapsedMs)ms: \(collectedDeadlines.count) deadlines, \(collectedGrades.count) grades across \(activeCourses.count) courses.")
         await statusCallback(.synced)
         return state.recentActivity
+    }
+
+    private func pollSingleCourse(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String),
+        enableDriveMirror: Bool,
+        directAutomationCommand: String?,
+        statusCallback: @escaping @MainActor @Sendable (SyncVisualState) -> Void
+    ) async -> SingleCourseSyncResult {
+        async let deadlinesTask = pollCourseDeadlines(
+            baseURL: baseURL,
+            valenceVersion: valenceVersion,
+            course: course,
+            credentials: credentials
+        )
+        async let gradesTask = pollCourseGrades(
+            baseURL: baseURL,
+            valenceVersion: valenceVersion,
+            course: course,
+            credentials: credentials
+        )
+        async let contentTask: Void = {
+            try? await pollCourseContentRoot(
+                baseURL: baseURL,
+                valenceVersion: valenceVersion,
+                course: course,
+                credentials: credentials,
+                enableDriveMirror: enableDriveMirror,
+                directAutomationCommand: directAutomationCommand,
+                statusCallback: statusCallback
+            )
+        }()
+        async let announcementsTask: Void = {
+            try? await pollCourseAnnouncements(
+                baseURL: baseURL,
+                valenceVersion: valenceVersion,
+                course: course,
+                credentials: credentials,
+                enableDriveMirror: enableDriveMirror,
+                directAutomationCommand: directAutomationCommand,
+                statusCallback: statusCallback
+            )
+        }()
+        async let overviewTask: Void = {
+            try? await pollCourseOverviewAttachment(
+                baseURL: baseURL,
+                valenceVersion: valenceVersion,
+                course: course,
+                credentials: credentials,
+                enableDriveMirror: enableDriveMirror,
+                directAutomationCommand: directAutomationCommand,
+                statusCallback: statusCallback
+            )
+        }()
+
+        let courseDeadlines = await deadlinesTask
+        let courseGrades = await gradesTask
+        _ = await contentTask
+        _ = await announcementsTask
+        _ = await overviewTask
+
+        let succeeded = !courseDeadlines.isEmpty || !courseGrades.isEmpty
+        return SingleCourseSyncResult(
+            course: course,
+            deadlines: courseDeadlines,
+            grades: courseGrades,
+            success: succeeded
+        )
     }
 
     // MARK: - Deadlines (Assignments, Quizzes, Exams & Calendar) & Grades Polling
@@ -852,126 +949,58 @@ public actor BrightspaceSyncEngine {
         var results: [String: BrightspaceDeadlineItem] = [:]
         let baseHost = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-        // 1. Dropbox / Assignments
-        let dropboxURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/dropbox/folders/")
-        let dropboxReq = authenticatedRequest(url: dropboxURL, credentials: credentials)
-        if let (data, resp) = try? await URLSession.shared.data(for: dropboxReq),
-           let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-           let folders = try? JSONDecoder().decode([ValenceDropboxFolder].self, from: data) {
-            for f in folders {
-                let due = Self.parseBrightspaceDate(f.DueDate)
-                let start = Self.parseBrightspaceDate(f.Availability?.StartDate)
-                let end = Self.parseBrightspaceDate(f.Availability?.EndDate)
-                let desc = f.CustomInstructions?.Text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let item = BrightspaceDeadlineItem(
-                    id: "\(course.orgUnitId):dropbox:\(f.Id)",
-                    orgUnitId: course.orgUnitId,
-                    courseCode: course.courseCode,
-                    title: f.Name,
-                    kind: .assignment,
-                    dueDate: due,
-                    startDate: start,
-                    endDate: end,
-                    details: desc,
-                    webURL: "\(baseHost)/d2l/lms/dropbox/user/folders_list.d2l?ou=\(course.orgUnitId)"
-                )
-                results[item.title.lowercased()] = item
-            }
-        }
+        // Run Dropbox, Quizzes, and Calendar queries concurrently with async let
+        async let dropboxItemsTask = fetchDropboxDeadlines(
+            baseURL: baseURL,
+            valenceVersion: valenceVersion,
+            course: course,
+            credentials: credentials,
+            baseHost: baseHost
+        )
+        async let quizItemsTask = fetchQuizDeadlines(
+            baseURL: baseURL,
+            valenceVersion: valenceVersion,
+            course: course,
+            credentials: credentials,
+            baseHost: baseHost
+        )
+        async let calEventsTask = fetchCalendarDeadlines(
+            baseURL: baseURL,
+            valenceVersion: valenceVersion,
+            course: course,
+            credentials: credentials,
+            baseHost: baseHost
+        )
 
-        // 2. Quizzes (paginated via Next)
-        var nextQuizURL: URL? = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/quizzes/")
-        var pageGuard = 0
-        while let qURL = nextQuizURL, pageGuard < 5 {
-            pageGuard += 1
-            let qReq = authenticatedRequest(url: qURL, credentials: credentials)
-            guard let (data, resp) = try? await URLSession.shared.data(for: qReq),
-                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let page = try? JSONDecoder().decode(ValenceQuizListPage.self, from: data) else {
-                break
-            }
-            for q in page.Objects ?? [] {
-                let due = Self.parseBrightspaceDate(q.DueDate)
-                let start = Self.parseBrightspaceDate(q.StartDate)
-                let end = Self.parseBrightspaceDate(q.EndDate)
-                let lowerName = q.Name.lowercased()
-                let resolvedKind: BrightspaceDeadlineItem.Kind =
-                    (lowerName.contains("test") || lowerName.contains("exam") || lowerName.contains("midterm") || lowerName.contains("final"))
-                    ? .exam
-                    : (lowerName.contains("assignment") ? .assignment : .quiz)
-                let item = BrightspaceDeadlineItem(
-                    id: "\(course.orgUnitId):quiz:\(q.QuizId)",
-                    orgUnitId: course.orgUnitId,
-                    courseCode: course.courseCode,
-                    title: q.Name,
-                    kind: resolvedKind,
-                    dueDate: due,
-                    startDate: start,
-                    endDate: end,
-                    details: "",
-                    webURL: "\(baseHost)/d2l/lms/quizzing/user/quizzes_list.d2l?ou=\(course.orgUnitId)"
-                )
-                results[item.title.lowercased()] = item
-            }
-            if let nextStr = page.Next, !nextStr.isEmpty {
-                nextQuizURL = URL(string: nextStr)
+        let dropboxItems = await dropboxItemsTask
+        let quizItems = await quizItemsTask
+        let calItems = await calEventsTask
+
+        for item in dropboxItems {
+            results[item.title.lowercased()] = item
+        }
+        for item in quizItems {
+            results[item.title.lowercased()] = item
+        }
+        for item in calItems {
+            let key = item.title.lowercased()
+            if let existing = results[key] {
+                if existing.effectiveDate == nil {
+                    results[key] = BrightspaceDeadlineItem(
+                        id: existing.id,
+                        orgUnitId: existing.orgUnitId,
+                        courseCode: existing.courseCode,
+                        title: existing.title,
+                        kind: existing.kind,
+                        dueDate: item.dueDate ?? item.endDate ?? item.startDate,
+                        startDate: item.startDate,
+                        endDate: item.endDate,
+                        details: existing.details.isEmpty ? item.details : existing.details,
+                        webURL: item.webURL ?? existing.webURL
+                    )
+                }
             } else {
-                nextQuizURL = nil
-            }
-        }
-
-        // 3. Calendar Events (Exams, Tests, Deadlines)
-        let calURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/calendar/events/")
-        let calReq = authenticatedRequest(url: calURL, credentials: credentials)
-        if let (data, resp) = try? await URLSession.shared.data(for: calReq),
-           let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-           let events = try? JSONDecoder().decode([ValenceCalendarEvent].self, from: data) {
-            for ev in events {
-                let start = Self.parseBrightspaceDate(ev.StartDateTime)
-                let end = Self.parseBrightspaceDate(ev.EndDateTime)
-                let key = ev.Title.lowercased()
-                if let existing = results[key] {
-                    if existing.effectiveDate == nil {
-                        results[key] = BrightspaceDeadlineItem(
-                            id: existing.id,
-                            orgUnitId: existing.orgUnitId,
-                            courseCode: existing.courseCode,
-                            title: existing.title,
-                            kind: existing.kind,
-                            dueDate: end ?? start,
-                            startDate: start,
-                            endDate: end,
-                            details: existing.details.isEmpty ? (ev.Description ?? "") : existing.details,
-                            webURL: ev.CalendarEventViewUrl ?? existing.webURL
-                        )
-                    }
-                    continue
-                }
-                let entityType = ev.AssociatedEntity?.AssociatedEntityType ?? ""
-                let lowerTitle = ev.Title.lowercased()
-                let resolvedKind: BrightspaceDeadlineItem.Kind
-                if lowerTitle.contains("test") || lowerTitle.contains("exam") || lowerTitle.contains("midterm") || lowerTitle.contains("final") {
-                    resolvedKind = .exam
-                } else if entityType.contains("Dropbox") || lowerTitle.contains("assignment") {
-                    resolvedKind = .assignment
-                } else if entityType.contains("Quiz") || lowerTitle.contains("quiz") || lowerTitle.contains("ice") {
-                    resolvedKind = .quiz
-                } else {
-                    resolvedKind = .calendarEvent
-                }
-
-                results[key] = BrightspaceDeadlineItem(
-                    id: "\(course.orgUnitId):cal:\(ev.CalendarEventId)",
-                    orgUnitId: course.orgUnitId,
-                    courseCode: course.courseCode,
-                    title: ev.Title,
-                    kind: resolvedKind,
-                    dueDate: end ?? start,
-                    startDate: start,
-                    endDate: end,
-                    details: ev.Description ?? "",
-                    webURL: ev.CalendarEventViewUrl ?? "\(baseHost)/d2l/le/calendar/\(course.orgUnitId)"
-                )
+                results[key] = item
             }
         }
 
@@ -985,6 +1014,135 @@ public actor BrightspaceSyncEngine {
         }
 
         return Array(results.values)
+    }
+
+    private func fetchDropboxDeadlines(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String),
+        baseHost: String
+    ) async -> [BrightspaceDeadlineItem] {
+        let dropboxURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/dropbox/folders/")
+        let dropboxReq = authenticatedRequest(url: dropboxURL, credentials: credentials)
+        guard let (data, resp) = try? await urlSession.data(for: dropboxReq),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let folders = try? JSONDecoder().decode([ValenceDropboxFolder].self, from: data) else {
+            return []
+        }
+        return folders.map { f in
+            let due = Self.parseBrightspaceDate(f.DueDate)
+            let start = Self.parseBrightspaceDate(f.Availability?.StartDate)
+            let end = Self.parseBrightspaceDate(f.Availability?.EndDate)
+            let desc = f.CustomInstructions?.Text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return BrightspaceDeadlineItem(
+                id: "\(course.orgUnitId):dropbox:\(f.Id)",
+                orgUnitId: course.orgUnitId,
+                courseCode: course.courseCode,
+                title: f.Name,
+                kind: .assignment,
+                dueDate: due,
+                startDate: start,
+                endDate: end,
+                details: desc,
+                webURL: "\(baseHost)/d2l/lms/dropbox/user/folders_list.d2l?ou=\(course.orgUnitId)"
+            )
+        }
+    }
+
+    private func fetchQuizDeadlines(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String),
+        baseHost: String
+    ) async -> [BrightspaceDeadlineItem] {
+        var results: [BrightspaceDeadlineItem] = []
+        var nextQuizURL: URL? = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/quizzes/")
+        var pageGuard = 0
+        while let qURL = nextQuizURL, pageGuard < 5 {
+            pageGuard += 1
+            let qReq = authenticatedRequest(url: qURL, credentials: credentials)
+            guard let (data, resp) = try? await urlSession.data(for: qReq),
+                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let page = try? JSONDecoder().decode(ValenceQuizListPage.self, from: data) else {
+                break
+            }
+            for q in page.Objects ?? [] {
+                let due = Self.parseBrightspaceDate(q.DueDate)
+                let start = Self.parseBrightspaceDate(q.StartDate)
+                let end = Self.parseBrightspaceDate(q.EndDate)
+                let lowerName = q.Name.lowercased()
+                let resolvedKind: BrightspaceDeadlineItem.Kind =
+                    (lowerName.contains("test") || lowerName.contains("exam") || lowerName.contains("midterm") || lowerName.contains("final"))
+                    ? .exam
+                    : (lowerName.contains("assignment") ? .assignment : .quiz)
+                results.append(
+                    BrightspaceDeadlineItem(
+                        id: "\(course.orgUnitId):quiz:\(q.QuizId)",
+                        orgUnitId: course.orgUnitId,
+                        courseCode: course.courseCode,
+                        title: q.Name,
+                        kind: resolvedKind,
+                        dueDate: due,
+                        startDate: start,
+                        endDate: end,
+                        details: "",
+                        webURL: "\(baseHost)/d2l/lms/quizzing/user/quizzes_list.d2l?ou=\(course.orgUnitId)"
+                    )
+                )
+            }
+            if let nextStr = page.Next, !nextStr.isEmpty {
+                nextQuizURL = URL(string: nextStr)
+            } else {
+                nextQuizURL = nil
+            }
+        }
+        return results
+    }
+
+    private func fetchCalendarDeadlines(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String),
+        baseHost: String
+    ) async -> [BrightspaceDeadlineItem] {
+        let calURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/calendar/events/")
+        let calReq = authenticatedRequest(url: calURL, credentials: credentials)
+        guard let (data, resp) = try? await urlSession.data(for: calReq),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let events = try? JSONDecoder().decode([ValenceCalendarEvent].self, from: data) else {
+            return []
+        }
+        return events.map { ev in
+            let start = Self.parseBrightspaceDate(ev.StartDateTime)
+            let end = Self.parseBrightspaceDate(ev.EndDateTime)
+            let entityType = ev.AssociatedEntity?.AssociatedEntityType ?? ""
+            let lowerTitle = ev.Title.lowercased()
+            let resolvedKind: BrightspaceDeadlineItem.Kind
+            if lowerTitle.contains("test") || lowerTitle.contains("exam") || lowerTitle.contains("midterm") || lowerTitle.contains("final") {
+                resolvedKind = .exam
+            } else if entityType.contains("Dropbox") || lowerTitle.contains("assignment") {
+                resolvedKind = .assignment
+            } else if entityType.contains("Quiz") || lowerTitle.contains("quiz") || lowerTitle.contains("ice") {
+                resolvedKind = .quiz
+            } else {
+                resolvedKind = .calendarEvent
+            }
+            return BrightspaceDeadlineItem(
+                id: "\(course.orgUnitId):cal:\(ev.CalendarEventId)",
+                orgUnitId: course.orgUnitId,
+                courseCode: course.courseCode,
+                title: ev.Title,
+                kind: resolvedKind,
+                dueDate: end ?? start,
+                startDate: start,
+                endDate: end,
+                details: ev.Description ?? "",
+                webURL: ev.CalendarEventViewUrl ?? "\(baseHost)/d2l/le/calendar/\(course.orgUnitId)"
+            )
+        }
     }
 
     // MARK: - Syllabus & Course Outline In-Person Exam Dates
@@ -1155,7 +1313,7 @@ public actor BrightspaceSyncEngine {
     ) async throws {
         let overviewURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/overview")
         let overviewReq = authenticatedRequest(url: overviewURL, credentials: credentials)
-        guard let (data, resp) = try? await URLSession.shared.data(for: overviewReq),
+        guard let (data, resp) = try? await urlSession.data(for: overviewReq),
               let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hasAttachment = json["HasAttachment"] as? Bool, hasAttachment else {
@@ -1164,7 +1322,7 @@ public actor BrightspaceSyncEngine {
 
         let attURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/overview/attachment")
         let attReq = authenticatedRequest(url: attURL, credentials: credentials)
-        guard let (fileData, fileResp) = try? await URLSession.shared.data(for: attReq),
+        guard let (fileData, fileResp) = try? await urlSession.data(for: attReq),
               let fileHttp = fileResp as? HTTPURLResponse, (200...299).contains(fileHttp.statusCode),
               !fileData.isEmpty else {
             return
@@ -1218,7 +1376,7 @@ public actor BrightspaceSyncEngine {
     ) async -> [BrightspaceGradeItem] {
         let gradesURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/grades/values/myGradeValues/")
         let req = authenticatedRequest(url: gradesURL, credentials: credentials)
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        guard let (data, resp) = try? await urlSession.data(for: req),
               let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
               let items = try? JSONDecoder().decode([ValenceGradeValueItem].self, from: data) else {
             return []
@@ -1266,7 +1424,7 @@ public actor BrightspaceSyncEngine {
             let tocEndpoint = baseURL.appending(path: "/d2l/api/le/\(ver)/\(course.orgUnitId)/content/toc")
             let tocRequest = authenticatedRequest(url: tocEndpoint, credentials: credentials)
             do {
-                let (data, response) = try await URLSession.shared.data(for: tocRequest)
+                let (data, response) = try await urlSession.data(for: tocRequest)
                 if let http = response as? HTTPURLResponse {
                     appendLog("[\(course.courseCode) \(course.orgUnitId)] /content/toc (v\(ver)) HTTP \(http.statusCode), \(data.count) bytes")
                     if (200...299).contains(http.statusCode) {
@@ -1293,7 +1451,7 @@ public actor BrightspaceSyncEngine {
             for ver in versionsToTry {
                 let rootEndpoint = baseURL.appending(path: "/d2l/api/le/\(ver)/\(course.orgUnitId)/content/root/")
                 let rootRequest = authenticatedRequest(url: rootEndpoint, credentials: credentials)
-                if let (data, response) = try? await URLSession.shared.data(for: rootRequest),
+                if let (data, response) = try? await urlSession.data(for: rootRequest),
                    let http = response as? HTTPURLResponse,
                    (200...299).contains(http.statusCode),
                    let decoded = try? JSONDecoder().decode([ValenceModuleObject].self, from: data) {
@@ -1365,7 +1523,7 @@ public actor BrightspaceSyncEngine {
                 path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/content/modules/\(moduleId)/structure/"
             )
             let req = authenticatedRequest(url: structureURL, credentials: credentials)
-            if let (sData, sResp) = try? await URLSession.shared.data(for: req),
+            if let (sData, sResp) = try? await urlSession.data(for: req),
                let http = sResp as? HTTPURLResponse, (200...299).contains(http.statusCode),
                let items = try? JSONDecoder().decode([ValenceStructureItem].self, from: sData) {
                 for item in items {
@@ -1569,7 +1727,7 @@ public actor BrightspaceSyncEngine {
     ) async throws {
         let newsURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/news/")
         let req = authenticatedRequest(url: newsURL, credentials: credentials)
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await urlSession.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
 
         let items = try JSONDecoder().decode([ValenceNewsItem].self, from: data)
@@ -1624,7 +1782,6 @@ public actor BrightspaceSyncEngine {
                 notebookRouteLabel: syncedNotebook ? "Synced to Notebook" : "Saved Locally"
             )
             prependActivity(activity)
-            persistState()
 
             LocalFileManager.shared.postNewMaterialNotification(
                 fileName: safeFileName,

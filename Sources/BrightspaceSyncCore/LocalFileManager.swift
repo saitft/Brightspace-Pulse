@@ -27,6 +27,14 @@ public final class LocalFileManager: NSObject, UNUserNotificationCenterDelegate,
     public static let revealInFinderActionID = "REVEAL_IN_FINDER_ACTION"
 
     private let fileCoordinatorQueue = DispatchQueue(label: "com.brightspacesync.filemanager", qos: .utility)
+    private let urlSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 16
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 60
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
 
     private override init() {
         super.init()
@@ -124,7 +132,7 @@ public final class LocalFileManager: NSObject, UNUserNotificationCenterDelegate,
         directAutomationCommand: String?,
         notebookWorkspaceID: String?
     ) async throws -> DownloadedAssetResult {
-        let (tempFileURL, response) = try await URLSession.shared.download(for: request)
+        let (tempFileURL, response) = try await urlSession.download(for: request)
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
             try? FileManager.default.removeItem(at: tempFileURL)
             throw URLError(.badServerResponse)
