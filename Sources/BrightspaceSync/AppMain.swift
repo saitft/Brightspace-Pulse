@@ -808,17 +808,42 @@ private struct CourseGradeSummaryCard: View {
         courseColor(for: courseCode)
     }
 
-    private var calculatedAverage: Double? {
-        let nonCat = items.filter { !$0.isCategory }
-        let weightedItems = nonCat.filter { ($0.weightedDenominator ?? 0) > 0 }
-        if !weightedItems.isEmpty {
-            let wNum = weightedItems.compactMap(\.weightedNumerator).reduce(0, +)
-            let wDen = weightedItems.compactMap(\.weightedDenominator).reduce(0, +)
-            if wDen > 0 { return (wNum / wDen) * 100.0 }
+    private var courseStanding: (percentage: Double, earnedPts: Double, totalPts: Double)? {
+        let cats = items.filter { $0.isCategory }
+        let validCats = cats.filter { ($0.weightedDenominator ?? 0) > 0 }
+        if !validCats.isEmpty {
+            let num = validCats.compactMap(\.weightedNumerator).reduce(0, +)
+            let den = validCats.compactMap(\.weightedDenominator).reduce(0, +)
+            if den > 0 {
+                return ((num / den) * 100.0, num, den)
+            }
         }
+
+        if courseCode.uppercased() == "MAT1320" {
+            let assigns = items.filter { $0.name.lowercased().contains("assignment") && ($0.pointsDenominator ?? 0) > 0 }
+            let test1 = items.first { $0.name.lowercased().contains("test 1") && ($0.pointsDenominator ?? 0) > 0 }
+            var weightedAcc = 0.0
+            var totalEvalWeight = 0.0
+            if !assigns.isEmpty {
+                let avg = assigns.compactMap(\.percentage).reduce(0, +) / Double(assigns.count)
+                weightedAcc += (avg / 100.0) * 10.0
+                totalEvalWeight += 10.0
+            }
+            if let t1 = test1, let p = t1.percentage {
+                weightedAcc += (p / 100.0) * 20.0
+                totalEvalWeight += 20.0
+            }
+            if totalEvalWeight > 0 {
+                return ((weightedAcc / totalEvalWeight) * 100.0, weightedAcc, totalEvalWeight)
+            }
+        }
+
+        let nonCat = items.filter { !$0.isCategory && ($0.pointsDenominator ?? 0) > 0 }
+        guard !nonCat.isEmpty else { return nil }
         let pcts = nonCat.compactMap(\.percentage)
         guard !pcts.isEmpty else { return nil }
-        return pcts.reduce(0, +) / Double(pcts.count)
+        let avg = pcts.reduce(0, +) / Double(pcts.count)
+        return (avg, avg, 100.0)
     }
 
     var body: some View {
@@ -831,14 +856,20 @@ private struct CourseGradeSummaryCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let avg = calculatedAverage {
+            if let standing = courseStanding {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(String(format: "%.1f%%", avg))
+                    Text(String(format: "%.1f%%", standing.percentage))
                         .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
-                    Text(letterGrade(for: avg))
+                    Text(letterGrade(for: standing.percentage))
                         .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(gradeColor(for: avg))
+                        .foregroundStyle(gradeColor(for: standing.percentage))
+                }
+
+                if standing.totalPts < 100.0 {
+                    Text(String(format: "%.1f / %.1f course pts", standing.earnedPts, standing.totalPts))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 Text("Graded")
