@@ -85,19 +85,164 @@ public struct SyncActivityItem: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+public struct BrightspaceDeadlineItem: Identifiable, Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, CaseIterable, Sendable {
+        case assignment = "Assignment"
+        case quiz = "Quiz"
+        case exam = "Exam / Test"
+        case calendarEvent = "Event"
+    }
+
+    public let id: String // "{orgUnitId}:{kind}:{itemId}"
+    public let orgUnitId: String
+    public let courseCode: String
+    public let title: String
+    public let kind: Kind
+    public let dueDate: Date?
+    public let startDate: Date?
+    public let endDate: Date?
+    public let details: String
+    public let webURL: String?
+
+    public var effectiveDate: Date? {
+        dueDate ?? endDate ?? startDate
+    }
+
+    public init(
+        id: String,
+        orgUnitId: String,
+        courseCode: String,
+        title: String,
+        kind: Kind,
+        dueDate: Date? = nil,
+        startDate: Date? = nil,
+        endDate: Date? = nil,
+        details: String = "",
+        webURL: String? = nil
+    ) {
+        self.id = id
+        self.orgUnitId = orgUnitId
+        self.courseCode = courseCode
+        self.title = title
+        self.kind = kind
+        self.dueDate = dueDate
+        self.startDate = startDate
+        self.endDate = endDate
+        self.details = details
+        self.webURL = webURL
+    }
+}
+
+public struct BrightspaceGradeItem: Identifiable, Codable, Equatable, Sendable {
+    public let id: String // "{orgUnitId}:{gradeObjectId}"
+    public let orgUnitId: String
+    public let courseCode: String
+    public let name: String
+    public let typeName: String
+    public let displayedGrade: String
+    public let pointsNumerator: Double?
+    public let pointsDenominator: Double?
+    public let weightedNumerator: Double?
+    public let weightedDenominator: Double?
+    public let isCategory: Bool
+    public let comments: String
+
+    public var percentage: Double? {
+        if let n = pointsNumerator, let d = pointsDenominator, d > 0 {
+            return (n / d) * 100.0
+        }
+        if let wn = weightedNumerator, let wd = weightedDenominator, wd > 0 {
+            return (wn / wd) * 100.0
+        }
+        return nil
+    }
+
+    public init(
+        id: String,
+        orgUnitId: String,
+        courseCode: String,
+        name: String,
+        typeName: String,
+        displayedGrade: String,
+        pointsNumerator: Double?,
+        pointsDenominator: Double?,
+        weightedNumerator: Double?,
+        weightedDenominator: Double?,
+        isCategory: Bool,
+        comments: String = ""
+    ) {
+        self.id = id
+        self.orgUnitId = orgUnitId
+        self.courseCode = courseCode
+        self.name = name
+        self.typeName = typeName
+        self.displayedGrade = displayedGrade
+        self.pointsNumerator = pointsNumerator
+        self.pointsDenominator = pointsDenominator
+        self.weightedNumerator = weightedNumerator
+        self.weightedDenominator = weightedDenominator
+        self.isCategory = isCategory
+        self.comments = comments
+    }
+}
+
+public struct LocalCourseFileItem: Identifiable, Equatable, Sendable {
+    public var id: String { localFilePath }
+    public let courseCode: String
+    public let moduleName: String
+    public let fileName: String
+    public let fileExtension: String
+    public let fileSizeBytes: Int64
+    public let modifiedDate: Date
+    public let localFilePath: String
+
+    public init(
+        courseCode: String,
+        moduleName: String,
+        fileName: String,
+        fileExtension: String,
+        fileSizeBytes: Int64,
+        modifiedDate: Date,
+        localFilePath: String
+    ) {
+        self.courseCode = courseCode
+        self.moduleName = moduleName
+        self.fileName = fileName
+        self.fileExtension = fileExtension
+        self.fileSizeBytes = fileSizeBytes
+        self.modifiedDate = modifiedDate
+        self.localFilePath = localFilePath
+    }
+}
+
 public struct PersistentSyncState: Codable, Sendable {
     public var lastSuccessfulSync: Date?
     public var cachedTopics: [String: CachedTopicRecord]
     public var recentActivity: [SyncActivityItem]
+    public var deadlines: [BrightspaceDeadlineItem]
+    public var grades: [BrightspaceGradeItem]
 
     public init(
         lastSuccessfulSync: Date? = nil,
         cachedTopics: [String: CachedTopicRecord] = [:],
-        recentActivity: [SyncActivityItem] = []
+        recentActivity: [SyncActivityItem] = [],
+        deadlines: [BrightspaceDeadlineItem] = [],
+        grades: [BrightspaceGradeItem] = []
     ) {
         self.lastSuccessfulSync = lastSuccessfulSync
         self.cachedTopics = cachedTopics
         self.recentActivity = recentActivity
+        self.deadlines = deadlines
+        self.grades = grades
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.lastSuccessfulSync = try container.decodeIfPresent(Date.self, forKey: .lastSuccessfulSync)
+        self.cachedTopics = try container.decodeIfPresent([String: CachedTopicRecord].self, forKey: .cachedTopics) ?? [:]
+        self.recentActivity = try container.decodeIfPresent([SyncActivityItem].self, forKey: .recentActivity) ?? []
+        self.deadlines = try container.decodeIfPresent([BrightspaceDeadlineItem].self, forKey: .deadlines) ?? []
+        self.grades = try container.decodeIfPresent([BrightspaceGradeItem].self, forKey: .grades) ?? []
     }
 }
 
@@ -172,6 +317,71 @@ public struct ValenceEnrollmentPagedResult: Decodable, Sendable {
         public let Access: AccessInfo?
     }
     public let Items: [EnrollmentItem]?
+}
+
+/// Matches Brightspace Valence `/d2l/api/le/1.67/{orgUnitId}/dropbox/folders/` JSON.
+public struct ValenceDropboxFolder: Decodable, Sendable {
+    public struct AvailabilityInfo: Decodable, Sendable {
+        public let StartDate: String?
+        public let EndDate: String?
+    }
+    public struct RichText: Decodable, Sendable {
+        public let Text: String?
+        public let Html: String?
+    }
+    public let Id: Int
+    public let Name: String
+    public let DueDate: String?
+    public let Availability: AvailabilityInfo?
+    public let CustomInstructions: RichText?
+}
+
+/// Matches Brightspace Valence `/d2l/api/le/1.67/{orgUnitId}/quizzes/` JSON.
+public struct ValenceQuizListPage: Decodable, Sendable {
+    public struct QuizItem: Decodable, Sendable {
+        public let QuizId: Int
+        public let Name: String
+        public let IsActive: Bool?
+        public let StartDate: String?
+        public let EndDate: String?
+        public let DueDate: String?
+    }
+    public let Next: String?
+    public let Objects: [QuizItem]?
+}
+
+/// Matches Brightspace Valence `/d2l/api/le/1.67/{orgUnitId}/calendar/events/` JSON.
+public struct ValenceCalendarEvent: Decodable, Sendable {
+    public struct AssociatedEntityInfo: Decodable, Sendable {
+        public let AssociatedEntityType: String?
+        public let AssociatedEntityId: Int?
+    }
+    public let CalendarEventId: Int
+    public let OrgUnitId: Int?
+    public let Title: String
+    public let Description: String?
+    public let CalendarEventViewUrl: String?
+    public let StartDateTime: String?
+    public let EndDateTime: String?
+    public let AssociatedEntity: AssociatedEntityInfo?
+}
+
+/// Matches Brightspace Valence `/d2l/api/le/1.67/{orgUnitId}/grades/values/myGradeValues/` JSON.
+public struct ValenceGradeValueItem: Decodable, Sendable {
+    public struct RichText: Decodable, Sendable {
+        public let Text: String?
+        public let Html: String?
+    }
+    public let GradeObjectIdentifier: String?
+    public let GradeObjectName: String?
+    public let GradeObjectType: Int?
+    public let GradeObjectTypeName: String?
+    public let DisplayedGrade: String?
+    public let PointsNumerator: Double?
+    public let PointsDenominator: Double?
+    public let WeightedNumerator: Double?
+    public let WeightedDenominator: Double?
+    public let Comments: RichText?
 }
 
 // MARK: - Native macOS Keychain Manager
@@ -525,6 +735,9 @@ public actor BrightspaceSyncEngine {
         }
 
         var succeededCourseCount = 0
+        var collectedDeadlines: [BrightspaceDeadlineItem] = []
+        var collectedGrades: [BrightspaceGradeItem] = []
+
         for course in courses where course.isEnabled {
             do {
                 try await pollCourseContentRoot(
@@ -546,6 +759,23 @@ public actor BrightspaceSyncEngine {
                     directAutomationCommand: directAutomationCommand,
                     statusCallback: statusCallback
                 )
+
+                let courseDeadlines = await pollCourseDeadlines(
+                    baseURL: baseURL,
+                    valenceVersion: valenceVersion,
+                    course: course,
+                    credentials: creds
+                )
+                collectedDeadlines.append(contentsOf: courseDeadlines)
+
+                let courseGrades = await pollCourseGrades(
+                    baseURL: baseURL,
+                    valenceVersion: valenceVersion,
+                    course: course,
+                    credentials: creds
+                )
+                collectedGrades.append(contentsOf: courseGrades)
+
                 succeededCourseCount += 1
             } catch {
                 continue
@@ -557,10 +787,199 @@ public actor BrightspaceSyncEngine {
             return state.recentActivity
         }
 
+        if !collectedDeadlines.isEmpty {
+            state.deadlines = collectedDeadlines
+        }
+        if !collectedGrades.isEmpty {
+            state.grades = collectedGrades
+        }
         state.lastSuccessfulSync = Date()
         persistState()
         await statusCallback(.synced)
         return state.recentActivity
+    }
+
+    // MARK: - Deadlines (Assignments, Quizzes, Exams & Calendar) & Grades Polling
+
+    private static func parseBrightspaceDate(_ iso: String?) -> Date? {
+        guard let raw = iso, !raw.isEmpty else { return nil }
+        let f1 = ISO8601DateFormatter()
+        f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f1.date(from: raw) { return d }
+        let f2 = ISO8601DateFormatter()
+        f2.formatOptions = [.withInternetDateTime]
+        return f2.date(from: raw)
+    }
+
+    private func pollCourseDeadlines(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String)
+    ) async -> [BrightspaceDeadlineItem] {
+        var results: [String: BrightspaceDeadlineItem] = [:]
+        let baseHost = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        // 1. Dropbox / Assignments
+        let dropboxURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/dropbox/folders/")
+        let dropboxReq = authenticatedRequest(url: dropboxURL, credentials: credentials)
+        if let (data, resp) = try? await URLSession.shared.data(for: dropboxReq),
+           let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+           let folders = try? JSONDecoder().decode([ValenceDropboxFolder].self, from: data) {
+            for f in folders {
+                let due = Self.parseBrightspaceDate(f.DueDate)
+                let start = Self.parseBrightspaceDate(f.Availability?.StartDate)
+                let end = Self.parseBrightspaceDate(f.Availability?.EndDate)
+                let desc = f.CustomInstructions?.Text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let item = BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):dropbox:\(f.Id)",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: f.Name,
+                    kind: .assignment,
+                    dueDate: due,
+                    startDate: start,
+                    endDate: end,
+                    details: desc,
+                    webURL: "\(baseHost)/d2l/lms/dropbox/user/folders_list.d2l?ou=\(course.orgUnitId)"
+                )
+                results[item.title.lowercased()] = item
+            }
+        }
+
+        // 2. Quizzes (paginated via Next)
+        var nextQuizURL: URL? = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/quizzes/")
+        var pageGuard = 0
+        while let qURL = nextQuizURL, pageGuard < 5 {
+            pageGuard += 1
+            let qReq = authenticatedRequest(url: qURL, credentials: credentials)
+            guard let (data, resp) = try? await URLSession.shared.data(for: qReq),
+                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let page = try? JSONDecoder().decode(ValenceQuizListPage.self, from: data) else {
+                break
+            }
+            for q in page.Objects ?? [] {
+                let due = Self.parseBrightspaceDate(q.DueDate)
+                let start = Self.parseBrightspaceDate(q.StartDate)
+                let end = Self.parseBrightspaceDate(q.EndDate)
+                let lowerName = q.Name.lowercased()
+                let resolvedKind: BrightspaceDeadlineItem.Kind =
+                    (lowerName.contains("test") || lowerName.contains("exam") || lowerName.contains("midterm") || lowerName.contains("final"))
+                    ? .exam
+                    : (lowerName.contains("assignment") ? .assignment : .quiz)
+                let item = BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):quiz:\(q.QuizId)",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: q.Name,
+                    kind: resolvedKind,
+                    dueDate: due,
+                    startDate: start,
+                    endDate: end,
+                    details: "",
+                    webURL: "\(baseHost)/d2l/lms/quizzing/user/quizzes_list.d2l?ou=\(course.orgUnitId)"
+                )
+                results[item.title.lowercased()] = item
+            }
+            if let nextStr = page.Next, !nextStr.isEmpty {
+                nextQuizURL = URL(string: nextStr)
+            } else {
+                nextQuizURL = nil
+            }
+        }
+
+        // 3. Calendar Events (Exams, Tests, Deadlines)
+        let calURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/calendar/events/")
+        let calReq = authenticatedRequest(url: calURL, credentials: credentials)
+        if let (data, resp) = try? await URLSession.shared.data(for: calReq),
+           let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+           let events = try? JSONDecoder().decode([ValenceCalendarEvent].self, from: data) {
+            for ev in events {
+                let start = Self.parseBrightspaceDate(ev.StartDateTime)
+                let end = Self.parseBrightspaceDate(ev.EndDateTime)
+                let key = ev.Title.lowercased()
+                if let existing = results[key] {
+                    if existing.effectiveDate == nil {
+                        results[key] = BrightspaceDeadlineItem(
+                            id: existing.id,
+                            orgUnitId: existing.orgUnitId,
+                            courseCode: existing.courseCode,
+                            title: existing.title,
+                            kind: existing.kind,
+                            dueDate: end ?? start,
+                            startDate: start,
+                            endDate: end,
+                            details: existing.details.isEmpty ? (ev.Description ?? "") : existing.details,
+                            webURL: ev.CalendarEventViewUrl ?? existing.webURL
+                        )
+                    }
+                    continue
+                }
+                let entityType = ev.AssociatedEntity?.AssociatedEntityType ?? ""
+                let lowerTitle = ev.Title.lowercased()
+                let resolvedKind: BrightspaceDeadlineItem.Kind
+                if lowerTitle.contains("test") || lowerTitle.contains("exam") || lowerTitle.contains("midterm") || lowerTitle.contains("final") {
+                    resolvedKind = .exam
+                } else if entityType.contains("Dropbox") || lowerTitle.contains("assignment") {
+                    resolvedKind = .assignment
+                } else if entityType.contains("Quiz") || lowerTitle.contains("quiz") || lowerTitle.contains("ice") {
+                    resolvedKind = .quiz
+                } else {
+                    resolvedKind = .calendarEvent
+                }
+
+                results[key] = BrightspaceDeadlineItem(
+                    id: "\(course.orgUnitId):cal:\(ev.CalendarEventId)",
+                    orgUnitId: course.orgUnitId,
+                    courseCode: course.courseCode,
+                    title: ev.Title,
+                    kind: resolvedKind,
+                    dueDate: end ?? start,
+                    startDate: start,
+                    endDate: end,
+                    details: ev.Description ?? "",
+                    webURL: ev.CalendarEventViewUrl ?? "\(baseHost)/d2l/le/calendar/\(course.orgUnitId)"
+                )
+            }
+        }
+
+        return Array(results.values)
+    }
+
+    private func pollCourseGrades(
+        baseURL: URL,
+        valenceVersion: String,
+        course: CourseMapping,
+        credentials: (sessionVal: String, secureSessionVal: String)
+    ) async -> [BrightspaceGradeItem] {
+        let gradesURL = baseURL.appending(path: "/d2l/api/le/\(valenceVersion)/\(course.orgUnitId)/grades/values/myGradeValues/")
+        let req = authenticatedRequest(url: gradesURL, credentials: credentials)
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let items = try? JSONDecoder().decode([ValenceGradeValueItem].self, from: data) else {
+            return []
+        }
+
+        return items.enumerated().map { idx, g in
+            let objId = g.GradeObjectIdentifier ?? "\(idx)"
+            let typeName = g.GradeObjectTypeName ?? "Grade Item"
+            let isCat = (g.GradeObjectType == 9) || typeName.localizedCaseInsensitiveContains("Category")
+            let commentText = g.Comments?.Text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return BrightspaceGradeItem(
+                id: "\(course.orgUnitId):grade:\(objId)",
+                orgUnitId: course.orgUnitId,
+                courseCode: course.courseCode,
+                name: (g.GradeObjectName ?? "Grade Item").trimmingCharacters(in: .whitespacesAndNewlines),
+                typeName: typeName,
+                displayedGrade: g.DisplayedGrade ?? "—",
+                pointsNumerator: g.PointsNumerator,
+                pointsDenominator: g.PointsDenominator,
+                weightedNumerator: g.WeightedNumerator,
+                weightedDenominator: g.WeightedDenominator,
+                isCategory: isCat,
+                comments: commentText
+            )
+        }
     }
 
     // MARK: - Module & Topic Tree Traversal

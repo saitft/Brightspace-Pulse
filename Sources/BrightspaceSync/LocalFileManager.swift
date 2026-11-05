@@ -371,6 +371,20 @@ public final class LocalFileManager: NSObject, UNUserNotificationCenterDelegate,
     }
 
     @MainActor
+    public func openFile(url: URL) {
+        let rootURL = resolveRootDirectoryURL()
+        let didAccess = rootURL.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { rootURL.stopAccessingSecurityScopedResource() }
+        }
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
+            NSWorkspace.shared.open(url)
+        } else {
+            revealInFinder(url: url)
+        }
+    }
+
+    @MainActor
     public func openRootStorageFolder() {
         let rootURL = resolveRootDirectoryURL()
         let didAccess = rootURL.startAccessingSecurityScopedResource()
@@ -379,6 +393,61 @@ public final class LocalFileManager: NSObject, UNUserNotificationCenterDelegate,
         }
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         NSWorkspace.shared.open(rootURL)
+    }
+
+    public func scanAllLocalCourseFiles(courses: [CourseMapping]) -> [LocalCourseFileItem] {
+        let rootURL = resolveRootDirectoryURL()
+        let didAccess = rootURL.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { rootURL.stopAccessingSecurityScopedResource() }
+        }
+
+        let fm = FileManager.default
+        var results: [LocalCourseFileItem] = []
+        var visitedPaths: Set<String> = []
+
+        var folderMap: [(courseCode: String, folderURL: URL)] = []
+        for c in courses {
+            let sub = c.customSubfolder.isEmpty ? c.courseCode : c.customSubfolder
+            let url = rootURL.appendingPathComponent(sanitizePathComponent(sub), isDirectory: true)
+            folderMap.append((c.courseCode, url))
+            if sub != c.courseCode {
+                let altURL = rootURL.appendingPathComponent(sanitizePathComponent(c.courseCode), isDirectory: true)
+                folderMap.append((c.courseCode, altURL))
+            }
+        }
+
+        for (code, courseDir) in folderMap {
+            let dirPath = courseDir.path(percentEncoded: false)
+            guard !visitedPaths.contains(dirPath), fm.fileExists(atPath: dirPath) else { continue }
+            visitedPaths.insert(dirPath)
+
+            guard let enumerator = fm.enumerator(
+                at: courseDir,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for case let fileURL as URL in enumerator {
+                guard let vals = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
+                      vals.isRegularFile == true else { continue }
+                let relComponents = fileURL.pathComponents.dropFirst(courseDir.pathComponents.count)
+                let moduleName = relComponents.count > 1 ? relComponents.dropLast().joined(separator: " / ") : "General"
+                results.append(
+                    LocalCourseFileItem(
+                        courseCode: code,
+                        moduleName: moduleName,
+                        fileName: fileURL.lastPathComponent,
+                        fileExtension: fileURL.pathExtension.lowercased(),
+                        fileSizeBytes: Int64(vals.fileSize ?? 0),
+                        modifiedDate: vals.contentModificationDate ?? Date.distantPast,
+                        localFilePath: fileURL.path(percentEncoded: false)
+                    )
+                )
+            }
+        }
+
+        return results.sorted { $0.modifiedDate > $1.modifiedDate }
     }
 
     // MARK: - Rich macOS Notifications (UNUserNotificationCenter)
