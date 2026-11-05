@@ -335,6 +335,38 @@ public actor BrightspaceSyncEngine {
         return !creds.sessionVal.isEmpty && !creds.secureSessionVal.isEmpty
     }
 
+    public func clearCredentials() {
+        KeychainStore.delete(account: Self.d2lSessionAccount)
+        KeychainStore.delete(account: Self.d2lSecureSessionAccount)
+        KeychainStore.delete(account: Self.d2lFullCookieAccount)
+        KeychainStore.delete(account: Self.d2lCsrfTokenAccount)
+    }
+
+    /// Verifies that the stored D2L session cookies are actively accepted by the Brightspace server (not expired / 403).
+    public func validateSession(baseURLString: String) async -> Bool {
+        let creds = loadCredentials()
+        guard !creds.sessionVal.isEmpty, !creds.secureSessionVal.isEmpty,
+              let baseURL = URL(string: baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return false
+        }
+
+        for ver in ["1.43", "1.35", "1.28"] {
+            let whoamiURL = baseURL.appending(path: "/d2l/api/lp/\(ver)/users/whoami")
+            let req = authenticatedRequest(url: whoamiURL, credentials: creds)
+            if let (_, resp) = try? await URLSession.shared.data(for: req),
+               let http = resp as? HTTPURLResponse {
+                if (200...299).contains(http.statusCode) {
+                    return true
+                }
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    appendLog("[AuthCheck] /users/whoami (v\(ver)) returned HTTP \(http.statusCode) — session expired")
+                    return false
+                }
+            }
+        }
+        return false
+    }
+
     // MARK: - Automatic Enrolled Course Discovery (Valence LP API)
 
     /// Queries `/d2l/api/lp/{version}/enrollments/myenrollments/` and returns active enrolled courses.
@@ -486,6 +518,13 @@ public actor BrightspaceSyncEngine {
 
         await statusCallback(.checkingBrightspace)
 
+        let sessionValid = await validateSession(baseURLString: baseURLString)
+        guard sessionValid else {
+            await statusCallback(.authRequired)
+            return state.recentActivity
+        }
+
+        var succeededCourseCount = 0
         for course in courses where course.isEnabled {
             do {
                 try await pollCourseContentRoot(
@@ -507,10 +546,15 @@ public actor BrightspaceSyncEngine {
                     directAutomationCommand: directAutomationCommand,
                     statusCallback: statusCallback
                 )
+                succeededCourseCount += 1
             } catch {
-                // Continue polling remaining courses while surfacing error only if all fail
                 continue
             }
+        }
+
+        if succeededCourseCount == 0 && !courses.filter(\.isEnabled).isEmpty {
+            await statusCallback(.authRequired)
+            return state.recentActivity
         }
 
         state.lastSuccessfulSync = Date()

@@ -98,21 +98,6 @@ public final class AppViewModel: ObservableObject {
         }
 
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1500))
-            var creds = await engine.loadCredentials()
-            if creds.sessionVal.isEmpty || creds.secureSessionVal.isEmpty {
-                if let recovered = await self.hydrateFromWebKitCookieStore() {
-                    await engine.saveCredentials(
-                        d2lSessionVal: recovered.s1,
-                        d2lSecureSessionVal: recovered.s2,
-                        fullCookieHeader: recovered.fullCookie
-                    )
-                    creds = (recovered.s1, recovered.s2)
-                }
-            }
-            self.d2lSessionVal = creds.sessionVal
-            self.d2lSecureSessionVal = creds.secureSessionVal
-
             let persisted = await engine.currentState()
             self.lastSyncDate = persisted.lastSuccessfulSync
             if persisted.recentActivity.isEmpty {
@@ -120,25 +105,45 @@ public final class AppViewModel: ObservableObject {
             } else {
                 self.activities = persisted.recentActivity
             }
+
             // No background daemon polling: only sync on-demand when app is opened
             await engine.stopSchedule()
-            if !creds.sessionVal.isEmpty && !creds.secureSessionVal.isEmpty {
-                self.triggerManualSync()
+            self.triggerManualSync()
+        }
+    }
+
+    private func purgeStaleD2LCookies() async {
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            store.getAllCookies { continuation.resume(returning: $0) }
+        }
+        for cookie in cookies where cookie.name == "d2lSessionVal" || cookie.name == "d2lSecureSessionVal" {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                store.delete(cookie) { continuation.resume() }
             }
         }
     }
 
-    private func hydrateFromWebKitCookieStore() async -> (s1: String, s2: String, fullCookie: String)? {
+    private func hydrateFromWebKitCookieStore(purgeExistingD2L: Bool = false) async -> (s1: String, s2: String, fullCookie: String)? {
+        if purgeExistingD2L {
+            await purgeStaleD2LCookies()
+        }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: config)
         self.warmupWebView = wv
         defer { self.warmupWebView = nil }
 
-        if let url = URL(string: brightspaceURL) {
+        let targetURLString = brightspaceURL.hasSuffix("/") ? "\(brightspaceURL)d2l/home" : "\(brightspaceURL)/d2l/home"
+        if let url = URL(string: targetURLString) {
             wv.load(URLRequest(url: url))
         }
-        try? await Task.sleep(for: .milliseconds(2500))
+        try? await Task.sleep(for: .milliseconds(3500))
+
+        let finalPath = wv.url?.path.lowercased() ?? ""
+        if finalPath.contains("login") {
+            return nil
+        }
 
         return await withCheckedContinuation { continuation in
             wv.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
@@ -205,35 +210,55 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func triggerManualSync() {
-        Task {
-            let hasCreds = await engine.hasValidCredentials()
-            if hasCreds {
-                let updated = await engine.pollCourses(
-                    baseURLString: brightspaceURL,
-                    courses: courses,
-                    enableDriveMirror: enableDriveMirror,
-                    directAutomationCommand: directAutomationCommand
-                ) { [weak self] newState in
-                    self?.syncState = newState
-                }
-                self.activities = updated
-                self.lastSyncDate = Date()
-            } else {
-                guard let targetCourse = courses.first(where: { $0.isEnabled }) ?? courses.first else { return }
-                let updated = await engine.runLiveVerificationSample(
-                    course: targetCourse,
-                    enableDriveMirror: enableDriveMirror,
-                    directAutomationCommand: directAutomationCommand
-                ) { [weak self] newState in
-                    self?.syncState = newState
-                }
-                self.activities = updated
-                self.lastSyncDate = Date()
+        Task { @MainActor in
+            syncState = .checkingBrightspace
+            var creds = await engine.loadCredentials()
+            var isSessionAlive = false
+
+            if !creds.sessionVal.isEmpty && !creds.secureSessionVal.isEmpty {
+                isSessionAlive = await engine.validateSession(baseURLString: brightspaceURL)
             }
 
-            if self.autoCloseAfterSync {
-                try? await Task.sleep(for: .milliseconds(1600))
-                NSApp.terminate(nil)
+            // If stored session expired or missing, try silent SSO refresh via WebKit cookie store
+            if !isSessionAlive {
+                if let recovered = await self.hydrateFromWebKitCookieStore(purgeExistingD2L: true) {
+                    await engine.saveCredentials(
+                        d2lSessionVal: recovered.s1,
+                        d2lSecureSessionVal: recovered.s2,
+                        fullCookieHeader: recovered.fullCookie
+                    )
+                    creds = (recovered.s1, recovered.s2)
+                    isSessionAlive = await engine.validateSession(baseURLString: brightspaceURL)
+                }
+            }
+
+            self.d2lSessionVal = isSessionAlive ? creds.sessionVal : ""
+            self.d2lSecureSessionVal = isSessionAlive ? creds.secureSessionVal : ""
+
+            guard isSessionAlive else {
+                await engine.clearCredentials()
+                self.syncState = .authRequired
+                self.isWebLoginSheetPresented = true
+                return
+            }
+
+            let updated = await engine.pollCourses(
+                baseURLString: brightspaceURL,
+                courses: courses,
+                enableDriveMirror: enableDriveMirror,
+                directAutomationCommand: directAutomationCommand
+            ) { [weak self] newState in
+                self?.syncState = newState
+            }
+            self.activities = updated
+            if self.syncState == .synced {
+                self.lastSyncDate = Date()
+                if self.autoCloseAfterSync {
+                    try? await Task.sleep(for: .milliseconds(1600))
+                    NSApp.terminate(nil)
+                }
+            } else if self.syncState == .authRequired {
+                self.isWebLoginSheetPresented = true
             }
         }
     }
@@ -351,14 +376,32 @@ public struct BrightspaceSyncApp: App {
 
     public var body: some Scene {
         WindowGroup("Brightspace Pulse") {
-            StatusPopoverView(
-                viewModel: viewModel,
-                onOpenSettings: {
-                    NSApp.activate(ignoringOtherApps: true)
-                    openWindow(id: "settings-window")
+            Group {
+                if viewModel.isWebLoginSheetPresented {
+                    BrightspaceWebAuthSheet(
+                        baseURLString: viewModel.brightspaceURL,
+                        onCookiesCaptured: { s1, s2, fullCookie, csrf in
+                            viewModel.d2lSessionVal = s1
+                            viewModel.d2lSecureSessionVal = s2
+                            viewModel.saveCredentialsToKeychain(fullCookieHeader: fullCookie, csrfToken: csrf)
+                            viewModel.isWebLoginSheetPresented = false
+                        },
+                        onCancel: {
+                            viewModel.isWebLoginSheetPresented = false
+                        }
+                    )
+                    .frame(width: 620, height: 520)
+                } else {
+                    StatusPopoverView(
+                        viewModel: viewModel,
+                        onOpenSettings: {
+                            NSApp.activate(ignoringOtherApps: true)
+                            openWindow(id: "settings-window")
+                        }
+                    )
+                    .frame(width: 430)
                 }
-            )
-            .frame(width: 430)
+            }
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
@@ -464,6 +507,29 @@ public struct StatusPopoverView: View {
 
             Divider()
                 .opacity(0.4)
+
+            if viewModel.syncState == .authRequired {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.radiowaves.forward.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Brightspace Session Expired")
+                            .font(.system(size: 11.5, weight: .bold))
+                            .foregroundStyle(.primary)
+                        Text("Sign in via SSO to refresh your session and sync new course files.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Sign In") {
+                        viewModel.isWebLoginSheetPresented = true
+                    }
+                    .buttonStyle(GlassActionButtonStyle(prominent: true))
+                }
+                .liquidGlassCard(cornerRadius: 10, padding: 10, isInteractive: false)
+                .padding(.horizontal, 14)
+            }
 
             // Activity Feed
             if viewModel.filteredActivities.isEmpty {
@@ -1158,8 +1224,19 @@ private struct BrightspaceCookieWebView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
 
-        if let url = URL(string: baseURLString) {
-            webView.load(URLRequest(url: url))
+        let store = config.websiteDataStore.httpCookieStore
+        let targetString = baseURLString.hasSuffix("/") ? "\(baseURLString)d2l/home" : "\(baseURLString)/d2l/home"
+        store.getAllCookies { cookies in
+            let group = DispatchGroup()
+            for cookie in cookies where cookie.name == "d2lSessionVal" || cookie.name == "d2lSecureSessionVal" {
+                group.enter()
+                store.delete(cookie) { group.leave() }
+            }
+            group.notify(queue: .main) {
+                if let url = URL(string: targetString) {
+                    webView.load(URLRequest(url: url))
+                }
+            }
         }
         return webView
     }
@@ -1175,6 +1252,12 @@ private struct BrightspaceCookieWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            let currentHost = webView.url?.host?.lowercased() ?? ""
+            let currentPath = webView.url?.path.lowercased() ?? ""
+            guard currentHost.contains("brightspace"), !currentPath.contains("login") else {
+                return
+            }
+
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                 var sessionVal: String?
                 var secureSessionVal: String?
