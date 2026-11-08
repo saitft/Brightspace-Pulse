@@ -137,25 +137,7 @@ public struct BrightspaceDesktopWorkspaceView: View {
         VStack(alignment: .leading, spacing: 14) {
             // App Branding Header
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.cyan.opacity(0.35), Color.indigo.opacity(0.25)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 34, height: 34)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
-                        )
-
-                    Image(systemName: viewModel.syncState.isBusy ? "arrow.triangle.2.circlepath" : "sparkles.rectangle.stack.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.cyan)
-                }
+                AppIconBadge(size: 36, isBusy: viewModel.syncState.isBusy)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Brightspace Pulse")
@@ -1067,9 +1049,7 @@ public struct StatusPopoverView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "sparkles.rectangle.stack.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.cyan)
+                AppIconBadge(size: 28, isBusy: viewModel.syncState.isBusy)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Brightspace Pulse")
@@ -1692,4 +1672,27 @@ enum SharedFormatters {
         df.dateFormat = "EEE, MMM d • h:mm a"
         return df
     }()
+}
+
+
+// MARK: - In-App Brand Icon (uses the bundled AppIcon.icns)
+
+struct AppIconBadge: View {
+    let size: CGFloat
+    var isBusy: Bool = false
+
+    var body: some View {
+        Image(nsImage: NSApp.applicationIconImage ?? NSImage())
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .overlay(alignment: .bottomTrailing) {
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .offset(x: 3, y: 3)
+                }
+            }
+            .accessibilityLabel("Brightspace Pulse")
+    }
 }
