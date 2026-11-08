@@ -185,9 +185,7 @@ public struct BrightspaceDesktopWorkspaceView: View {
                         badgeColor: section == .upcoming && !viewModel.urgentDeadlinesWithin48Hours.isEmpty ? .orange : .cyan,
                         isSelected: viewModel.selectedSection == section
                     ) {
-                        withAnimation(.snappy(duration: 0.18)) {
-                            viewModel.selectedSection = section
-                        }
+                        viewModel.selectedSection = section
                     }
                 }
             }
@@ -362,8 +360,7 @@ public struct BrightspaceDesktopWorkspaceView: View {
         guard let date = viewModel.lastSyncDate else {
             return "On-Demand Mode • Syncs automatically on open"
         }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
+        let formatter = SharedFormatters.relative
         return "Last synced \(formatter.localizedString(for: date, relativeTo: Date())) • On-Demand Mode"
     }
 
@@ -446,7 +443,8 @@ public struct UpcomingDeadlinesView: View {
             .padding(.horizontal, 20)
             .padding(.top, viewModel.urgentDeadlinesWithin48Hours.isEmpty ? 14 : 4)
 
-            if viewModel.filteredDeadlines.isEmpty {
+            let deadlineItems = viewModel.filteredDeadlines
+            if deadlineItems.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 32, weight: .light))
@@ -462,7 +460,7 @@ public struct UpcomingDeadlinesView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 9) {
-                        ForEach(viewModel.filteredDeadlines) { item in
+                        ForEach(deadlineItems) { item in
                             DeadlineRowCard(item: item)
                         }
                     }
@@ -496,9 +494,7 @@ private struct DeadlineRowCard: View {
         }
         let delta = date.timeIntervalSinceNow
         if delta < 0 {
-            let f = RelativeDateTimeFormatter()
-            f.unitsStyle = .abbreviated
-            return ("Due \(f.localizedString(for: date, relativeTo: Date()))", .secondary)
+            return ("Due \(SharedFormatters.relative.localizedString(for: date, relativeTo: Date()))", .secondary)
         } else if delta <= 3600 * 48 {
             let hours = max(1, Int(delta / 3600))
             return ("Due in \(hours)h", .orange)
@@ -510,9 +506,7 @@ private struct DeadlineRowCard: View {
 
     private var formattedDateString: String {
         guard let date = item.effectiveDate else { return "No fixed deadline posted" }
-        let df = DateFormatter()
-        df.dateFormat = "EEE, MMM d • h:mm a"
-        return df.string(from: date)
+        return SharedFormatters.deadline.string(from: date)
     }
 
     var body: some View {
@@ -568,6 +562,7 @@ private struct DeadlineRowCard: View {
                 .foregroundStyle(badge.color)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
+                .contentShape(Capsule(style: .continuous))
                 .background(
                     Capsule(style: .continuous)
                         .fill(badge.color.opacity(0.14))
@@ -1013,6 +1008,8 @@ private struct SidebarNavRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
@@ -1050,6 +1047,8 @@ private struct SidebarCourseRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(isSelected ? color.opacity(0.15) : Color.clear)
@@ -1146,6 +1145,7 @@ private struct FilterChip: View {
                 .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
+                .contentShape(Capsule(style: .continuous))
                 .background(
                     Capsule(style: .continuous)
                         .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.05))
@@ -1179,8 +1179,7 @@ private struct ActivityFeedCard: View {
     }
 
     private var relativeTimeString: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
+        let formatter = SharedFormatters.relative
         return formatter.localizedString(for: item.downloadedAt, relativeTo: Date())
     }
 
@@ -1677,4 +1676,20 @@ private struct BrightspaceCookieWebView: NSViewRepresentable {
             }
         }
     }
+}
+
+
+// MARK: - Shared Cached Formatters (avoid per-row allocation)
+
+enum SharedFormatters {
+    static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+    static let deadline: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "EEE, MMM d • h:mm a"
+        return df
+    }()
 }

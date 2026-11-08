@@ -71,47 +71,25 @@ public struct LiquidGlassCardModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
+        // Performance: per-card blur materials + 2 large shadows were re-rendered for every
+        // row (75+ deadlines, 300 files). Cards now use a flat translucent fill over the
+        // window's single vibrancy layer, with one cheap shadow and no hover scale animation.
         content
             .padding(padding)
             .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.ultraThinMaterial)
-
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(surfaceTint)
-
-                    // Subtle top-edge specular reflection
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [
-                                    colorScheme == .dark ? Color.white.opacity(0.24) : Color.white.opacity(0.65),
-                                    primaryBorderColor,
-                                    colorScheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                }
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(surfaceTint)
             )
-            // Multi-layered soft ambient drop shadows
-            .shadow(
-                color: Color.black.opacity(colorScheme == .dark ? 0.34 : 0.10),
-                radius: 16,
-                x: 0,
-                y: 8
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(primaryBorderColor, lineWidth: 1)
             )
             .shadow(
-                color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.04),
-                radius: 3,
+                color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.05),
+                radius: 2,
                 x: 0,
                 y: 1
             )
-            .scaleEffect(isHovered && isInteractive ? 1.006 : 1.0)
-            .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isHovered)
             .onHover { hovering in
                 guard isInteractive else { return }
                 isHovered = hovering
