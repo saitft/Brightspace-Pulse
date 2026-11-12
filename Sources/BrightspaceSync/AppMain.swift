@@ -742,6 +742,26 @@ public struct GradesDashboardView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    // Cumulative GPA (CGPA) & Academic Standing Hero Banner
+                    if let summary = viewModel.cumulativeGPASummary {
+                        CGPAHeroCard(summary: summary, selectedCourse: viewModel.selectedCourseFilter)
+                    }
+
+                    // Section Divider Label
+                    HStack(spacing: 6) {
+                        Text("COURSE BREAKDOWN")
+                            .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Text("•")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                        Text("\(viewModel.filteredGradesByCourse.count) Courses Graded")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                    }
+                    .padding(.top, 2)
+
                     // Course Standing Summary Cards Row
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
@@ -777,6 +797,259 @@ public struct GradesDashboardView: View {
     }
 }
 
+// MARK: - CGPA & Academic Standing Hero Card (uOttawa 10.0 & 4.0 Scale)
+
+private struct CGPAHeroCard: View {
+    let summary: CumulativeGPASummary
+    let selectedCourse: String
+
+    @State private var showDetails: Bool = false
+
+    private var isSingleCourseFiltered: Bool {
+        selectedCourse != "ALL"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Top Row: Title, uOttawa Scale Tag, Academic Standing Pill & Disclosure
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(summary.standingColor.opacity(0.18))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: isSingleCourseFiltered ? "graduationcap.fill" : "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(summary.standingColor)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(isSingleCourseFiltered ? "\(selectedCourse) Academic Standing" : "Cumulative GPA (CGPA)")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.primary)
+
+                        Text("uOttawa 10.0 Scale")
+                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+
+                    Text(summary.standingTitle)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(summary.standingColor)
+                }
+
+                Spacer()
+
+                Button {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                        showDetails.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showDetails ? "chevron.up.circle.fill" : "info.circle")
+                            .font(.system(size: 11.5))
+                        Text(showDetails ? "Hide Scale" : "Scale Details")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Capsule())
+                    .background(Capsule().fill(Color.primary.opacity(0.05)))
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Middle Metrics Row: Large 10.0 CGPA + 4.0 GPA + Cumulative Average
+            HStack(spacing: 24) {
+                // Metric 1: uOttawa CGPA (10.0 scale)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isSingleCourseFiltered ? "COURSE GPA" : "OFFICIAL CGPA")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(String(format: "%.2f", summary.cgpa10))
+                            .font(.system(size: 32, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.primary)
+                        Text("/ 10.0")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Text(summary.letterGrade)
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(gradeColor(for: summary.averagePercentage))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(gradeColor(for: summary.averagePercentage).opacity(0.16))
+                            )
+                    }
+                }
+
+                Divider()
+                    .frame(height: 38)
+                    .opacity(0.3)
+
+                // Metric 2: Standard 4.0 Scale
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("STANDARD 4.0 SCALE")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(String(format: "%.2f", summary.cgpa4))
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+                        Text("/ 4.00")
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+                    .frame(height: 38)
+                    .opacity(0.3)
+
+                // Metric 3: Cumulative Average Percentage
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("WEIGHTED AVERAGE")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(String(format: "%.1f%%", summary.averagePercentage))
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(gradeColor(for: summary.averagePercentage))
+                    }
+                }
+
+                Spacer()
+
+                // Metric 4: Courses Contributing
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("COURSES")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                    Text("\(summary.gradedCoursesCount) Graded")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            // Visual Progress Meter on 10.0 Scale
+            VStack(alignment: .leading, spacing: 5) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(height: 8)
+
+                        let fraction = max(0.0, min(1.0, summary.cgpa10 / 10.0))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.cyan, summary.standingColor],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(8, geo.size.width * fraction), height: 8)
+                    }
+                }
+                .frame(height: 8)
+
+                HStack {
+                    Text("0.0 (F)")
+                    Spacer()
+                    Text("5.0 (Pass)")
+                    Spacer()
+                    Text("7.0 (B+)")
+                    Spacer()
+                    Text("8.5 (Dean's List)")
+                    Spacer()
+                    Text("10.0 (A+)")
+                }
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            }
+
+            // Contributing Course Breakdown Chips
+            if !summary.courseStandings.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(summary.courseStandings) { standing in
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(courseColor(for: standing.courseCode))
+                                    .frame(width: 6, height: 6)
+
+                                Text(standing.courseCode)
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.primary)
+
+                                if standing.isSatisfactoryOnly {
+                                    Text("S (Pass)")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(.mint)
+                                } else {
+                                    Text(String(format: "%.1f", standing.gradePoint10))
+                                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                                        .foregroundStyle(gradeColor(for: standing.percentage))
+
+                                    Text("(\(standing.letterGrade) • \(String(format: "%.0f%%", standing.percentage)))")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Expandable uOttawa Scale Reference Details
+            if showDetails {
+                VStack(alignment: .leading, spacing: 6) {
+                    Divider().opacity(0.25)
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Official uOttawa Senate 10.0 Grading Scheme:")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(.primary)
+                            Text("• A+ = 10.0 (90–100%)  • A = 9.0 (85–89%)  • A- = 8.0 (80–84%)\n• B+ = 7.0 (75–79%)   • B = 6.0 (70–74%)   • C+ = 5.0 (65–69%)\n• C  = 4.0 (60–64%)   • D+ = 3.0 (55–59%)  • D = 2.0 (50–54%)")
+                                .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Honours & Standing Rules:")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(.primary)
+                            Text("• Dean's Honour List: Term GPA ≥ 8.50 with ≥9 credits\n• Engineering Good Standing: Cumulative GPA ≥ 5.00\n• Non-numerical S/NS courses are excluded from GPA")
+                                .font(.system(size: 9.5, weight: .regular))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+        .liquidGlassCard(cornerRadius: 14, padding: 16, isInteractive: false)
+    }
+}
+
 private struct CourseGradeSummaryCard: View {
     let courseCode: String
     let items: [BrightspaceGradeItem]
@@ -785,42 +1058,8 @@ private struct CourseGradeSummaryCard: View {
         courseColor(for: courseCode)
     }
 
-    private var courseStanding: (percentage: Double, earnedPts: Double, totalPts: Double)? {
-        let cats = items.filter { $0.isCategory }
-        let validCats = cats.filter { ($0.weightedDenominator ?? 0) > 0 }
-        if !validCats.isEmpty {
-            let num = validCats.compactMap(\.weightedNumerator).reduce(0, +)
-            let den = validCats.compactMap(\.weightedDenominator).reduce(0, +)
-            if den > 0 {
-                return ((num / den) * 100.0, num, den)
-            }
-        }
-
-        if courseCode.uppercased() == "MAT1320" {
-            let assigns = items.filter { $0.name.lowercased().contains("assignment") && ($0.pointsDenominator ?? 0) > 0 }
-            let test1 = items.first { $0.name.lowercased().contains("test 1") && ($0.pointsDenominator ?? 0) > 0 }
-            var weightedAcc = 0.0
-            var totalEvalWeight = 0.0
-            if !assigns.isEmpty {
-                let avg = assigns.compactMap(\.percentage).reduce(0, +) / Double(assigns.count)
-                weightedAcc += (avg / 100.0) * 10.0
-                totalEvalWeight += 10.0
-            }
-            if let t1 = test1, let p = t1.percentage {
-                weightedAcc += (p / 100.0) * 20.0
-                totalEvalWeight += 20.0
-            }
-            if totalEvalWeight > 0 {
-                return ((weightedAcc / totalEvalWeight) * 100.0, weightedAcc, totalEvalWeight)
-            }
-        }
-
-        let nonCat = items.filter { !$0.isCategory && ($0.pointsDenominator ?? 0) > 0 }
-        guard !nonCat.isEmpty else { return nil }
-        let pcts = nonCat.compactMap(\.percentage)
-        guard !pcts.isEmpty else { return nil }
-        let avg = pcts.reduce(0, +) / Double(pcts.count)
-        return (avg, avg, 100.0)
+    private var standing: CourseStandingInfo? {
+        calculateCourseStanding(courseCode: courseCode, items: items)
     }
 
     var body: some View {
@@ -833,20 +1072,32 @@ private struct CourseGradeSummaryCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let standing = courseStanding {
+            if let st = standing {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(String(format: "%.1f%%", standing.percentage))
+                    Text(String(format: "%.1f%%", st.percentage))
                         .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
-                    Text(letterGrade(for: standing.percentage))
+                    Text(st.letterGrade)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(gradeColor(for: standing.percentage))
+                        .foregroundStyle(gradeColor(for: st.percentage))
                 }
 
-                if standing.totalPts < 100.0 {
-                    Text(String(format: "%.1f / %.1f course pts", standing.earnedPts, standing.totalPts))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    if st.isSatisfactoryOnly {
+                        Text("S • Pass")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.mint)
+                    } else {
+                        Text(String(format: "%.1f / 10.0 GPA", st.gradePoint10))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(gradeColor(for: st.percentage))
+                    }
+
+                    if st.totalPts < 100.0 {
+                        Text("• \(String(format: "%.1f", st.earnedPts))/\(String(format: "%.0f", st.totalPts)) pts")
+                            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } else {
                 Text("Graded")
@@ -854,7 +1105,7 @@ private struct CourseGradeSummaryCard: View {
                     .foregroundStyle(.primary)
             }
         }
-        .frame(width: 175)
+        .frame(width: 180)
         .liquidGlassCard(cornerRadius: 12, padding: 12, isInteractive: false)
     }
 }

@@ -340,6 +340,41 @@ public final class AppViewModel: ObservableObject {
         return groups
     }
 
+    public var cumulativeGPASummary: CumulativeGPASummary? {
+        let groups = filteredGradesByCourse
+        guard !groups.isEmpty else { return nil }
+
+        var standings: [CourseStandingInfo] = []
+        for g in groups {
+            if let st = calculateCourseStanding(courseCode: g.courseCode, items: g.items) {
+                standings.append(st)
+            }
+        }
+
+        guard !standings.isEmpty else { return nil }
+
+        // Filter for courses with numeric grading (uOttawa Senate excludes non-numerical S/NS from GPA calculations)
+        let numeric = standings.filter { !$0.isSatisfactoryOnly }
+        let target = numeric.isEmpty ? standings : numeric
+
+        let avg10 = target.map(\.gradePoint10).reduce(0, +) / Double(target.count)
+        let avg4 = target.map(\.gradePoint4).reduce(0, +) / Double(target.count)
+        let avgPct = target.map(\.percentage).reduce(0, +) / Double(target.count)
+        let standing = academicStanding(for: avg10)
+
+        return CumulativeGPASummary(
+            cgpa10: avg10,
+            cgpa4: avg4,
+            averagePercentage: avgPct,
+            letterGrade: letterGrade(for: avgPct),
+            standingTitle: standing.title,
+            standingColor: standing.color,
+            gradedCoursesCount: target.count,
+            totalCoursesEvaluated: standings.count,
+            courseStandings: standings
+        )
+    }
+
     public var filteredActivities: [SyncActivityItem] {
         if selectedCourseFilter == "ALL" {
             return activities
@@ -553,4 +588,194 @@ public func letterGrade(for pct: Double) -> String {
     case 50..<55: return "D"
     default: return "F"
     }
+}
+
+// MARK: - uOttawa & Standard GPA / CGPA Conversions
+
+/// Converts percentage to uOttawa official 10.0 scale grade points (Senate regulations)
+public func gradePoint10(for pct: Double) -> Double {
+    switch pct {
+    case 90...: return 10.0
+    case 85..<90: return 9.0
+    case 80..<85: return 8.0
+    case 75..<80: return 7.0
+    case 70..<75: return 6.0
+    case 65..<70: return 5.0
+    case 60..<65: return 4.0
+    case 55..<60: return 3.0
+    case 50..<55: return 2.0
+    case 40..<50: return 1.0
+    default: return 0.0
+    }
+}
+
+/// Converts percentage to North American 4.0 scale grade points
+public func gradePoint4(for pct: Double) -> Double {
+    switch pct {
+    case 90...: return 4.0
+    case 85..<90: return 3.9
+    case 80..<85: return 3.7
+    case 75..<80: return 3.3
+    case 70..<75: return 3.0
+    case 65..<70: return 2.3
+    case 60..<65: return 2.0
+    case 55..<60: return 1.3
+    case 50..<55: return 1.0
+    default: return 0.0
+    }
+}
+
+/// Academic standing assessment based on uOttawa 10.0 CGPA
+public func academicStanding(for cgpa10: Double) -> (title: String, color: Color) {
+    switch cgpa10 {
+    case 8.5...:
+        return ("Dean's Honour List (Exceptional Standing)", .green)
+    case 7.0..<8.5:
+        return ("Good Academic Standing (Very Good)", .cyan)
+    case 5.0..<7.0:
+        return ("Satisfactory Academic Standing", .mint)
+    case 4.0..<5.0:
+        return ("Academic Warning", .orange)
+    default:
+        return ("Academic Probation Alert", .red)
+    }
+}
+
+// MARK: - Course Standing & Cumulative GPA Models
+
+public struct CourseStandingInfo: Identifiable, Sendable {
+    public var id: String { courseCode }
+    public let courseCode: String
+    public let percentage: Double
+    public let earnedPts: Double
+    public let totalPts: Double
+    public let letterGrade: String
+    public let gradePoint10: Double
+    public let gradePoint4: Double
+    public let isSatisfactoryOnly: Bool
+
+    public init(
+        courseCode: String,
+        percentage: Double,
+        earnedPts: Double,
+        totalPts: Double,
+        letterGrade: String,
+        gradePoint10: Double,
+        gradePoint4: Double,
+        isSatisfactoryOnly: Bool = false
+    ) {
+        self.courseCode = courseCode
+        self.percentage = percentage
+        self.earnedPts = earnedPts
+        self.totalPts = totalPts
+        self.letterGrade = letterGrade
+        self.gradePoint10 = gradePoint10
+        self.gradePoint4 = gradePoint4
+        self.isSatisfactoryOnly = isSatisfactoryOnly
+    }
+}
+
+public struct CumulativeGPASummary: Sendable {
+    public let cgpa10: Double
+    public let cgpa4: Double
+    public let averagePercentage: Double
+    public let letterGrade: String
+    public let standingTitle: String
+    public let standingColor: Color
+    public let gradedCoursesCount: Int
+    public let totalCoursesEvaluated: Int
+    public let courseStandings: [CourseStandingInfo]
+
+    public init(
+        cgpa10: Double,
+        cgpa4: Double,
+        averagePercentage: Double,
+        letterGrade: String,
+        standingTitle: String,
+        standingColor: Color,
+        gradedCoursesCount: Int,
+        totalCoursesEvaluated: Int,
+        courseStandings: [CourseStandingInfo]
+    ) {
+        self.cgpa10 = cgpa10
+        self.cgpa4 = cgpa4
+        self.averagePercentage = averagePercentage
+        self.letterGrade = letterGrade
+        self.standingTitle = standingTitle
+        self.standingColor = standingColor
+        self.gradedCoursesCount = gradedCoursesCount
+        self.totalCoursesEvaluated = totalCoursesEvaluated
+        self.courseStandings = courseStandings
+    }
+}
+
+/// Evaluates course standing metrics (percentage, pts, letter, grade points) from Brightspace items
+public func calculateCourseStanding(courseCode: String, items: [BrightspaceGradeItem]) -> CourseStandingInfo? {
+    guard !items.isEmpty else { return nil }
+
+    let isSOnly = items.allSatisfy { item in
+        let disp = item.displayedGrade.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return disp == "S" || disp == "P"
+    }
+
+    let cats = items.filter { $0.isCategory }
+    let validCats = cats.filter { ($0.weightedDenominator ?? 0) > 0 }
+    var percentage: Double? = nil
+    var earnedPts = 0.0
+    var totalPts = 100.0
+
+    if !validCats.isEmpty {
+        let num = validCats.compactMap(\.weightedNumerator).reduce(0, +)
+        let den = validCats.compactMap(\.weightedDenominator).reduce(0, +)
+        if den > 0 {
+            percentage = (num / den) * 100.0
+            earnedPts = num
+            totalPts = den
+        }
+    }
+
+    if percentage == nil && courseCode.uppercased() == "MAT1320" {
+        let assigns = items.filter { $0.name.lowercased().contains("assignment") && ($0.pointsDenominator ?? 0) > 0 }
+        let test1 = items.first { $0.name.lowercased().contains("test 1") && ($0.pointsDenominator ?? 0) > 0 }
+        var weightedAcc = 0.0
+        var totalEvalWeight = 0.0
+        if !assigns.isEmpty {
+            let avg = assigns.compactMap(\.percentage).reduce(0, +) / Double(assigns.count)
+            weightedAcc += (avg / 100.0) * 10.0
+            totalEvalWeight += 10.0
+        }
+        if let t1 = test1, let p = t1.percentage {
+            weightedAcc += (p / 100.0) * 20.0
+            totalEvalWeight += 20.0
+        }
+        if totalEvalWeight > 0 {
+            percentage = (weightedAcc / totalEvalWeight) * 100.0
+            earnedPts = weightedAcc
+            totalPts = totalEvalWeight
+        }
+    }
+
+    if percentage == nil {
+        let nonCat = items.filter { !$0.isCategory && ($0.pointsDenominator ?? 0) > 0 }
+        let pcts = nonCat.compactMap(\.percentage)
+        if !pcts.isEmpty {
+            let avg = pcts.reduce(0, +) / Double(pcts.count)
+            percentage = avg
+            earnedPts = avg
+            totalPts = 100.0
+        }
+    }
+
+    guard let pct = percentage else { return nil }
+
+    return CourseStandingInfo(
+        courseCode: courseCode,
+        percentage: pct,
+        earnedPts: earnedPts,
+        totalPts: totalPts,
+        letterGrade: letterGrade(for: pct),
+        gradePoint10: gradePoint10(for: pct),
+        gradePoint4: gradePoint4(for: pct),
+        isSatisfactoryOnly: isSOnly
+    )
 }

@@ -116,6 +116,41 @@ func testAcademicLetterGradesAndColors() async {
         )
         assertTrue(categoryItem.isCategory)
         assertEqual(categoryItem.percentage ?? 0, 100.0)
+
+        // uOttawa 10.0 scale conversions
+        assertEqual(gradePoint10(for: 95.0), 10.0, "95% should be 10.0 A+")
+        assertEqual(gradePoint10(for: 87.0), 9.0, "87% should be 9.0 A")
+        assertEqual(gradePoint10(for: 82.0), 8.0, "82% should be 8.0 A-")
+        assertEqual(gradePoint10(for: 77.0), 7.0, "77% should be 7.0 B+")
+        assertEqual(gradePoint10(for: 72.0), 6.0, "72% should be 6.0 B")
+        assertEqual(gradePoint10(for: 67.0), 5.0, "67% should be 5.0 C+")
+        assertEqual(gradePoint10(for: 62.0), 4.0, "62% should be 4.0 C")
+        assertEqual(gradePoint10(for: 57.0), 3.0, "57% should be 3.0 D+")
+        assertEqual(gradePoint10(for: 52.0), 2.0, "52% should be 2.0 D")
+        assertEqual(gradePoint10(for: 45.0), 1.0, "45% should be 1.0 E")
+        assertEqual(gradePoint10(for: 30.0), 0.0, "30% should be 0.0 F")
+
+        // Standard 4.0 scale conversions
+        assertEqual(gradePoint4(for: 95.0), 4.0, "95% should be 4.0")
+        assertEqual(gradePoint4(for: 82.0), 3.7, "82% should be 3.7")
+        assertEqual(gradePoint4(for: 72.0), 3.0, "72% should be 3.0")
+        assertEqual(gradePoint4(for: 57.0), 1.3, "57% should be 1.3")
+
+        // Academic standing thresholds
+        assertEqual(academicStanding(for: 9.2).title, "Dean's Honour List (Exceptional Standing)")
+        assertEqual(academicStanding(for: 7.5).title, "Good Academic Standing (Very Good)")
+        assertEqual(academicStanding(for: 5.5).title, "Satisfactory Academic Standing")
+        assertEqual(academicStanding(for: 4.5).title, "Academic Warning")
+        assertEqual(academicStanding(for: 2.0).title, "Academic Probation Alert")
+
+        // Course standing computation
+        let standing = calculateCourseStanding(courseCode: "GNG1106", items: [categoryItem])
+        assertNotNil(standing)
+        assertEqual(standing?.percentage ?? 0, 100.0)
+        assertEqual(standing?.letterGrade ?? "", "A+")
+        assertEqual(standing?.gradePoint10 ?? 0, 10.0)
+        assertEqual(standing?.gradePoint4 ?? 0, 4.0)
+        assertFalse(standing?.isSatisfactoryOnly ?? true)
     }
 }
 
