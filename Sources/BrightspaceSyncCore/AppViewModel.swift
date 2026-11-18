@@ -85,7 +85,7 @@ public final class AppViewModel: ObservableObject {
 
     public init() {
         self.brightspaceURL = UserDefaults.standard.string(forKey: "BrightspaceSync.BaseURL")
-            ?? "https://brightspace.example.edu"
+            ?? "https://uottawa.brightspace.com"
         let savedPoll = UserDefaults.standard.double(forKey: "BrightspaceSync.PollMinutes")
         self.pollingIntervalMinutes = savedPoll > 0 ? savedPoll : 30.0
         self.enableDriveMirror = UserDefaults.standard.object(forKey: "BrightspaceSync.EnableDriveMirror") as? Bool ?? true

@@ -11,6 +11,7 @@ DerivedData/
 *.app/
 *.dSYM.zip
 *.dSYM
+*.zip
 
 # macOS & Local State / Credentials (Never commit!)
 .DS_Store

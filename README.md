@@ -49,25 +49,59 @@ BrightspaceSync/
 
 ---
 
-## Quick Start & Build Instructions
+## Quick Start & Installation
 
-### Prerequisites
-- macOS 14.0 (Sonoma) or newer
-- Xcode Command Line Tools (`xcode-select --install`, Swift 5.10 / Swift 6+)
+### Option A: Direct Download (Pre-built macOS App)
+1. **Download the latest release:**
+   Head to [**Releases**](https://github.com/saitft/Brightspace-Pulse/releases) and download `Brightspace-Pulse-v1.0.0-macOS.zip`.
+2. **Install:**
+   Double-click to unzip, then drag `Brightspace Pulse.app` into your `/Applications` folder.
+3. **First Launch (macOS Gatekeeper Bypass):**
+   Because this open-source build is ad-hoc signed and not notarized through an Apple Developer Team account:
+   - **Via Finder:** Right-click (or Control-click) `Brightspace Pulse.app` in `/Applications` > click **Open** > click **Open** in the dialog. (You only need to do this once).
+   - **Or via Terminal:**
+     ```bash
+     xattr -cr "/Applications/Brightspace Pulse.app"
+     ```
 
-### Run Test Suite
+---
+
+### Option B: Build From Source (Developers)
 ```bash
+# 1. Clone repository
+git clone https://github.com/saitft/Brightspace-Pulse.git
+cd Brightspace-Pulse
+
+# 2. Run unit & integration test suite (108 assertions)
 ./run_tests.sh
-# or
-swift run BrightspaceSyncTests
+
+# 3. Compile native Universal binary & package .app bundle with Liquid Glass AppIcon
+./bundle_app.sh
+
+# 4. Launch the application
+open "Brightspace Pulse.app"
 ```
 
-### Build & Package `.app` Bundle
-```bash
-chmod +x bundle_app.sh run_tests.sh
-./bundle_app.sh
-open BrightspaceSync.app
-```
+---
+
+## Connecting Your University (Any D2L / Brightspace Institution)
+
+Brightspace Pulse works out of the box with **any university or college** powered by D2L Brightspace:
+
+1. Click **Sign In with Brightspace** (or open the SSO Sheet).
+2. Choose your school from the built-in presets:
+   - **uOttawa** (`https://uottawa.brightspace.com`)
+   - **Carleton** (`https://brightspace.carleton.ca`)
+   - **Waterloo** (`https://learn.uwaterloo.ca`)
+   - **TMU** (`https://my.torontomu.ca`)
+   - **Calgary** (`https://d2l.ucalgary.ca`)
+   - *...or type your custom portal URL into the address bar and click **Load**.*
+3. Log in with your standard university Single Sign-On (SSO / Microsoft 365 / Duo 2FA / Okta).
+4. **Zero Configuration:** Brightspace Pulse automatically intercepts your session credentials securely into your macOS Keychain, queries the D2L Valence REST API to discover all enrolled courses, and populates:
+   - **Upcoming Assignments & Exam countdowns** (with 48-hour crunch alerts)
+   - **Course Files & Lecture Slides** (instant search & indexing)
+   - **Grades & Standing** (automatic uOttawa 10.0 CGPA & North American 4.0 GPA calculations)
+
 
 ---
 

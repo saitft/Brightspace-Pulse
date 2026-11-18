@@ -39,7 +39,8 @@ public struct BrightspaceSyncApp: App {
                 if viewModel.isWebLoginSheetPresented {
                     BrightspaceWebAuthSheet(
                         baseURLString: viewModel.brightspaceURL,
-                        onCookiesCaptured: { s1, s2, fullCookie, csrf in
+                        onCookiesCaptured: { s1, s2, fullCookie, csrf, activeURL in
+                            viewModel.brightspaceURL = activeURL
                             viewModel.d2lSessionVal = s1
                             viewModel.d2lSecureSessionVal = s2
                             viewModel.saveCredentialsToKeychain(fullCookieHeader: fullCookie, csrfToken: csrf)
@@ -1801,9 +1802,20 @@ public struct SettingsWindowView: View {
 // MARK: - Integrated WKWebView Brightspace Login Sheet
 
 public struct BrightspaceWebAuthSheet: View {
-    public let baseURLString: String
-    public let onCookiesCaptured: (String, String, String, String?) -> Void
+    @State private var currentURLString: String
+    @State private var reloadToken = UUID()
+    public let onCookiesCaptured: (String, String, String, String?, String) -> Void
     public let onCancel: () -> Void
+
+    public init(
+        baseURLString: String,
+        onCookiesCaptured: @escaping (String, String, String, String?, String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self._currentURLString = State(initialValue: baseURLString.isEmpty ? "https://uottawa.brightspace.com" : baseURLString)
+        self.onCookiesCaptured = onCookiesCaptured
+        self.onCancel = onCancel
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -1811,7 +1823,7 @@ public struct BrightspaceWebAuthSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Brightspace Single Sign-On")
                         .font(.system(size: 13.5, weight: .bold))
-                    Text("Sign in normally with your university SSO. Session cookies & CSRF token are captured automatically.")
+                    Text("Select your institution or enter your portal URL. Session cookies & CSRF token are captured automatically.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -1819,13 +1831,68 @@ public struct BrightspaceWebAuthSheet: View {
                 Button("Cancel", action: onCancel)
                     .buttonStyle(GlassActionButtonStyle(prominent: false))
             }
-            .padding(14)
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            // University Portal Selector & Address Bar
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "building.columns.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+
+                    TextField("https://uottawa.brightspace.com", text: $currentURLString)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11.5, design: .monospaced))
+
+                    Button {
+                        reloadToken = UUID()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Load")
+                        }
+                    }
+                    .buttonStyle(GlassActionButtonStyle(prominent: true))
+                }
+
+                HStack(spacing: 6) {
+                    Text("Presets:")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+
+                    ForEach([
+                        ("uOttawa", "https://uottawa.brightspace.com"),
+                        ("Carleton", "https://brightspace.carleton.ca"),
+                        ("Waterloo", "https://learn.uwaterloo.ca"),
+                        ("TMU", "https://my.torontomu.ca"),
+                        ("Calgary", "https://d2l.ucalgary.ca")
+                    ], id: \.0) { school, url in
+                        Button(school) {
+                            currentURLString = url
+                            reloadToken = UUID()
+                        }
+                        .font(.system(size: 10, weight: currentURLString.contains(url) ? .bold : .medium))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(currentURLString.contains(url) ? 0.12 : 0.04)))
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
 
             Divider()
 
             BrightspaceCookieWebView(
-                baseURLString: baseURLString,
-                onCaptured: onCookiesCaptured
+                baseURLString: currentURLString,
+                reloadToken: reloadToken,
+                onCaptured: { s1, s2, fullCookie, csrf in
+                    onCookiesCaptured(s1, s2, fullCookie, csrf, currentURLString)
+                }
             )
         }
         .liquidGlassContainer(cornerRadius: 14)
@@ -1834,6 +1901,7 @@ public struct BrightspaceWebAuthSheet: View {
 
 private struct BrightspaceCookieWebView: NSViewRepresentable {
     let baseURLString: String
+    let reloadToken: UUID
     let onCaptured: (String, String, String, String?) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1847,7 +1915,8 @@ private struct BrightspaceCookieWebView: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
 
         let store = config.websiteDataStore.httpCookieStore
-        let targetString = baseURLString.hasSuffix("/") ? "\(baseURLString)d2l/home" : "\(baseURLString)/d2l/home"
+        let trimmed = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetString = trimmed.hasSuffix("/") ? "\(trimmed)d2l/home" : "\(trimmed)/d2l/home"
         store.getAllCookies { cookies in
             let group = DispatchGroup()
             for cookie in cookies where cookie.name == "d2lSessionVal" || cookie.name == "d2lSecureSessionVal" {
@@ -1863,10 +1932,20 @@ private struct BrightspaceCookieWebView: NSViewRepresentable {
         return webView
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        if context.coordinator.lastReloadToken != reloadToken {
+            context.coordinator.lastReloadToken = reloadToken
+            let trimmed = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targetString = trimmed.hasSuffix("/") ? "\(trimmed)d2l/home" : "\(trimmed)/d2l/home"
+            if let url = URL(string: targetString) {
+                nsView.load(URLRequest(url: url))
+            }
+        }
+    }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         let onCaptured: (String, String, String, String?) -> Void
+        var lastReloadToken: UUID? = nil
         private var didCapture = false
 
         init(onCaptured: @escaping (String, String, String, String?) -> Void) {
