@@ -130,6 +130,10 @@ public struct BrightspaceDeadlineItem: Identifiable, Codable, Equatable, Sendabl
         dueDate ?? endDate ?? startDate
     }
 
+    public var signatureKey: String {
+        "\(courseCode.uppercased())|\(kind.rawValue.lowercased())|\(title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+    }
+
     public init(
         id: String,
         orgUnitId: String,

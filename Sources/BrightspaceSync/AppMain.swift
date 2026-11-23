@@ -187,10 +187,12 @@ public struct BrightspaceDesktopWorkspaceView: View {
                     .padding(.bottom, 2)
 
                 ScrollView(.vertical, showsIndicators: false) {
+                    let progress = viewModel.semesterProgressSummary
                     VStack(alignment: .leading, spacing: 3) {
                         SidebarCourseRow(
                             code: "All Courses",
-                            subtitle: "\(viewModel.uniqueEnabledCourseCodes.count) active",
+                            subtitle: "\(viewModel.uniqueEnabledCourseCodes.count) active • \(progress.totalCompleted)/\(progress.totalDeliverables) done",
+                            completionBadge: progress.totalDeliverables > 0 ? String(format: "%.0f%%", progress.overallPercentage) : nil,
                             color: .cyan,
                             isSelected: viewModel.selectedCourseFilter == "ALL"
                         ) {
@@ -199,9 +201,11 @@ public struct BrightspaceDesktopWorkspaceView: View {
 
                         ForEach(viewModel.uniqueEnabledCourseCodes, id: \.self) { code in
                             let courseTitle = viewModel.courses.first(where: { $0.courseCode == code })?.courseTitle ?? code
+                            let cSummary = progress.courseSummaries.first(where: { $0.courseCode == code })
                             SidebarCourseRow(
                                 code: code,
                                 subtitle: courseTitle,
+                                completionBadge: cSummary.map { String(format: "%.0f%%", $0.completionPercentage) },
                                 color: courseColor(for: code),
                                 isSelected: viewModel.selectedCourseFilter == code
                             ) {
@@ -370,93 +374,499 @@ public struct UpcomingDeadlinesView: View {
     @ObservedObject var viewModel: AppViewModel
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Urgent 48h Crunch Alert Banner (if any deadline is due within 48 hours)
+        let progress = viewModel.semesterProgressSummary
+
+        VStack(alignment: .leading, spacing: 10) {
+            // 1. Course & Semester Completion Progress Dashboard
+            if progress.totalDeliverables > 0 {
+                SemesterProgressHeroCard(
+                    summary: progress,
+                    selectedCourseFilter: viewModel.selectedCourseFilter,
+                    selectedStatusFilter: viewModel.selectedStatusFilter,
+                    onSelectCourse: { code in
+                        if viewModel.selectedCourseFilter == code {
+                            viewModel.selectedCourseFilter = "ALL"
+                        } else {
+                            viewModel.selectedCourseFilter = code
+                        }
+                    },
+                    onSelectStatus: { status in
+                        viewModel.selectedStatusFilter = status
+                        viewModel.showPastDeadlines = (status == .fullSemester)
+                    }
+                )
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+            }
+
+            // 2. Urgent 48h Crunch Alert Banner (only items that still Need Attention)
             if !viewModel.urgentDeadlinesWithin48Hours.isEmpty {
                 HStack(spacing: 12) {
                     ZStack {
                         Circle()
                             .fill(Color.orange.opacity(0.2))
-                            .frame(width: 34, height: 34)
+                            .frame(width: 32, height: 32)
                         Image(systemName: "flame.fill")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(.orange)
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("48-Hour Deadline Alert (\(viewModel.urgentDeadlinesWithin48Hours.count) Due Soon)")
-                            .font(.system(size: 12.5, weight: .bold))
+                        Text("48-Hour Deadline Alert (\(viewModel.urgentDeadlinesWithin48Hours.count) Need Attention)")
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.primary)
                         let names = viewModel.urgentDeadlinesWithin48Hours.map { "\($0.courseCode): \($0.title)" }.joined(separator: " • ")
                         Text(names)
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.orange)
                             .lineLimit(1)
                     }
                     Spacer()
+
+                    Button {
+                        viewModel.selectedStatusFilter = .needsAttention
+                        viewModel.showPastDeadlines = false
+                    } label: {
+                        Text("Focus Pending")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .buttonStyle(GlassActionButtonStyle(prominent: false))
                 }
-                .liquidGlassCard(cornerRadius: 12, padding: 12, isInteractive: false)
+                .liquidGlassCard(cornerRadius: 11, padding: 10, isInteractive: false)
                 .padding(.horizontal, 20)
-                .padding(.top, 12)
             }
 
-            // Filter & Search Bar
-            HStack(spacing: 8) {
-                ForEach(["ALL", "Assignment", "Quiz", "Exam / Test", "Event"], id: \.self) { kind in
-                    FilterChip(
-                        title: kind == "ALL" ? "All Types" : "\(kind)s",
-                        isSelected: viewModel.selectedDeadlineKind == kind
+            // 3. Status Filter & Type Filter Toolbar
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Text("STATUS")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .padding(.trailing, 2)
+
+                    StatusFilterPill(
+                        title: "All Upcoming",
+                        icon: "calendar.badge.clock",
+                        accent: .cyan,
+                        isSelected: viewModel.selectedStatusFilter == .allUpcoming && !viewModel.showPastDeadlines
                     ) {
-                        viewModel.selectedDeadlineKind = kind
+                        viewModel.selectedStatusFilter = .allUpcoming
+                        viewModel.showPastDeadlines = false
                     }
+
+                    StatusFilterPill(
+                        title: "Needs Attention (\(progress.totalNeedsAttention))",
+                        icon: "exclamationmark.circle.fill",
+                        accent: .orange,
+                        isSelected: viewModel.selectedStatusFilter == .needsAttention && !viewModel.showPastDeadlines
+                    ) {
+                        viewModel.selectedStatusFilter = .needsAttention
+                        viewModel.showPastDeadlines = false
+                    }
+
+                    StatusFilterPill(
+                        title: "Completed (\(progress.totalCompleted))",
+                        icon: "checkmark.circle.fill",
+                        accent: .green,
+                        isSelected: viewModel.selectedStatusFilter == .completed && !viewModel.showPastDeadlines
+                    ) {
+                        viewModel.selectedStatusFilter = .completed
+                        viewModel.showPastDeadlines = false
+                    }
+
+                    StatusFilterPill(
+                        title: "Full Semester (\(progress.totalDeliverables))",
+                        icon: "list.bullet.rectangle.portrait",
+                        accent: .purple,
+                        isSelected: viewModel.selectedStatusFilter == .fullSemester || viewModel.showPastDeadlines
+                    ) {
+                        viewModel.selectedStatusFilter = .fullSemester
+                        viewModel.showPastDeadlines = true
+                    }
+
+                    Spacer()
+
+                    TextField("Search deadlines...", text: $viewModel.deadlineSearchQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11.5))
+                        .frame(width: 185)
                 }
 
-                Spacer()
+                HStack(spacing: 6) {
+                    Text("TYPE")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .padding(.trailing, 10)
 
-                Toggle("Include Past / Completed", isOn: $viewModel.showPastDeadlines)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    ForEach(["ALL", "Assignment", "Quiz", "Exam / Test", "Event"], id: \.self) { kind in
+                        FilterChip(
+                            title: kind == "ALL" ? "All Types" : "\(kind)s",
+                            isSelected: viewModel.selectedDeadlineKind == kind
+                        ) {
+                            viewModel.selectedDeadlineKind = kind
+                        }
+                    }
 
-                TextField("Search deadlines...", text: $viewModel.deadlineSearchQuery)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11.5))
-                    .frame(width: 175)
+                    Spacer()
+                }
             }
             .padding(.horizontal, 20)
-            .padding(.top, viewModel.urgentDeadlinesWithin48Hours.isEmpty ? 14 : 4)
+            .padding(.top, 2)
 
+            // 4. Deadlines List
             let deadlineItems = viewModel.filteredDeadlines
             if deadlineItems.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 32, weight: .light))
-                        .foregroundStyle(Color.green.opacity(0.8))
-                    Text(viewModel.showPastDeadlines ? "No matching items in this filter." : "No upcoming deadlines in this filter!")
+                        .foregroundStyle(Color.green.opacity(0.85))
+                    Text(emptyStateHeadline)
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Toggle 'Include Past / Completed' above to inspect previous quizzes, assignments, and tests.")
+                    Text(emptyStateSubtitle)
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 9) {
+                    LazyVStack(spacing: 8) {
                         ForEach(deadlineItems) { item in
-                            DeadlineRowCard(item: item)
+                            let isDone = viewModel.isDeadlineCompleted(item)
+                            DeadlineRowCard(
+                                item: item,
+                                isCompleted: isDone,
+                                onToggleCompletion: {
+                                    viewModel.toggleDeadlineCompletion(item)
+                                }
+                            )
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 6)
                 }
             }
         }
+    }
+
+    private var emptyStateHeadline: String {
+        switch viewModel.selectedStatusFilter {
+        case .needsAttention:
+            return "All caught up! Nothing needs your attention right now."
+        case .completed:
+            return "No completed items match this filter yet."
+        case .allUpcoming, .fullSemester:
+            return "No matching deadlines in this filter."
+        }
+    }
+
+    private var emptyStateSubtitle: String {
+        switch viewModel.selectedStatusFilter {
+        case .needsAttention:
+            return "Switch to 'Completed' or 'All Upcoming' above to view your finished coursework."
+        case .completed:
+            return "Click 'Needs Attention' on any upcoming quiz or assignment card to mark it as Completed."
+        case .allUpcoming, .fullSemester:
+            return "Try switching course or type filters above."
+        }
+    }
+}
+
+// MARK: - Semester & Per-Course Progress Hero Dashboard
+
+private struct SemesterProgressHeroCard: View {
+    let summary: SemesterProgressSummary
+    let selectedCourseFilter: String
+    let selectedStatusFilter: DeadlineStatusFilter
+    let onSelectCourse: (String) -> Void
+    let onSelectStatus: (DeadlineStatusFilter) -> Void
+
+    private var progressColor: Color {
+        if summary.overallPercentage >= 85 { return .green }
+        if summary.overallPercentage >= 60 { return .cyan }
+        return .orange
+    }
+
+    private var scopeTitle: String {
+        selectedCourseFilter == "ALL"
+            ? "SEMESTER PROGRESS TRACKER • HOW FAR YOU'VE COME"
+            : "\(selectedCourseFilter) COURSE PROGRESS • HOW FAR YOU'VE COME"
+    }
+
+    private var milestoneNarrative: String {
+        let pctStr = String(format: "%.0f%%", summary.overallPercentage)
+        if selectedCourseFilter == "ALL" {
+            if summary.totalNeedsAttention == 0 {
+                return "You've completed 100% (\(summary.totalCompleted)/\(summary.totalDeliverables)) of tracked coursework across all courses!"
+            }
+            return "You've completed \(pctStr) of your semester (\(summary.totalCompleted) of \(summary.totalDeliverables) deliverables done) • \(summary.totalNeedsAttention) left needing attention."
+        } else {
+            if summary.totalNeedsAttention == 0 {
+                return "You've completed 100% (\(summary.totalCompleted)/\(summary.totalDeliverables)) of \(selectedCourseFilter)!"
+            }
+            return "You've completed \(pctStr) of \(selectedCourseFilter) (\(summary.totalCompleted) of \(summary.totalDeliverables) deliverables done) • \(summary.totalNeedsAttention) still need attention."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Top Row: Overall Progress & Quick Status Summary Pills
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(progressColor)
+                        Text(scopeTitle)
+                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(String(format: "%.0f%% Completed", summary.overallPercentage))
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+
+                        Text("(\(summary.totalCompleted) / \(summary.totalDeliverables) done)")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(progressColor)
+
+                        if summary.completedUpcomingCount > 0 {
+                            Text("+\(summary.completedUpcomingCount) finished early")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.green)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.green.opacity(0.15)))
+                        }
+                    }
+
+                    Text(milestoneNarrative)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                // Interactive Summary Counters
+                HStack(spacing: 8) {
+                    Button {
+                        onSelectStatus(selectedStatusFilter == .needsAttention ? .allUpcoming : .needsAttention)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("\(summary.totalNeedsAttention)")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                Text("Need Attention")
+                                    .font(.system(size: 9.5, weight: .medium))
+                            }
+                        }
+                        .foregroundStyle(summary.totalNeedsAttention > 0 ? Color.orange : Color.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Color.orange.opacity(selectedStatusFilter == .needsAttention ? 0.22 : 0.10))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(Color.orange.opacity(selectedStatusFilter == .needsAttention ? 0.55 : 0.22), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Filter to items that still need your attention")
+
+                    Button {
+                        onSelectStatus(selectedStatusFilter == .completed ? .allUpcoming : .completed)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("\(summary.totalCompleted)")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                Text("Completed")
+                                    .font(.system(size: 9.5, weight: .medium))
+                            }
+                        }
+                        .foregroundStyle(Color.green)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Color.green.opacity(selectedStatusFilter == .completed ? 0.22 : 0.10))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(Color.green.opacity(selectedStatusFilter == .completed ? 0.55 : 0.22), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("View all completed coursework")
+                }
+            }
+
+            // Full-Width Overall Progress Bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [progressColor.opacity(0.85), progressColor],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(6, geo.size.width * CGFloat(min(100, max(0, summary.overallPercentage)) / 100.0)))
+                }
+            }
+            .frame(height: 7)
+
+            // Per-Course Completion Cards Row ("How much of each course you completed")
+            if !summary.courseSummaries.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 9) {
+                        ForEach(summary.courseSummaries) { course in
+                            CourseCompletionCard(
+                                course: course,
+                                isSelected: selectedCourseFilter == course.courseCode,
+                                onSelect: {
+                                    onSelectCourse(course.courseCode)
+                                }
+                            )
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+        }
+        .liquidGlassCard(cornerRadius: 13, padding: 13, isInteractive: false)
+    }
+}
+
+private struct CourseCompletionCard: View {
+    let course: CourseProgressSummary
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    private var accent: Color {
+        courseColor(for: course.courseCode)
+    }
+
+    private var barColor: Color {
+        course.needsAttentionCount == 0 ? .green : accent
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    CourseTagBadge(courseCode: course.courseCode, accent: accent)
+                    Spacer()
+                    Text(String(format: "%.0f%%", course.completionPercentage))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(course.needsAttentionCount == 0 ? Color.green : Color.primary)
+                }
+
+                // Mini Course Progress Bar
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(Color.primary.opacity(0.08))
+                        Capsule(style: .continuous)
+                            .fill(barColor)
+                            .frame(width: max(4, geo.size.width * CGFloat(min(100, max(0, course.completionPercentage)) / 100.0)))
+                    }
+                }
+                .frame(height: 5)
+
+                HStack(spacing: 4) {
+                    Text("\(course.completedCount)/\(course.totalCount) done")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                    Text("•")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+
+                    if course.needsAttentionCount == 0 {
+                        Text("All done ✓")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("\(course.needsAttentionCount) left")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(width: 156, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? accent.opacity(0.16) : Color.primary.opacity(0.035))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? accent.opacity(0.55) : Color.primary.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("You completed \(String(format: "%.0f%%", course.completionPercentage)) of \(course.courseCode) (\(course.completedCount) of \(course.totalCount) items). Click to filter by \(course.courseCode).")
+    }
+}
+
+private struct StatusFilterPill: View {
+    let title: String
+    let icon: String
+    let accent: Color
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .bold))
+                Text(title)
+                    .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+            }
+            .foregroundStyle(isSelected ? accent : Color.secondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .contentShape(Capsule(style: .continuous))
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isSelected ? accent.opacity(0.18) : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(
+                        isSelected ? accent.opacity(0.48) : Color.primary.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
 private struct DeadlineRowCard: View {
     let item: BrightspaceDeadlineItem
+    let isCompleted: Bool
+    let onToggleCompletion: () -> Void
 
     private var accent: Color {
         courseColor(for: item.courseCode)
@@ -471,6 +881,12 @@ private struct DeadlineRowCard: View {
         }
     }
 
+    private var isUrgent48h: Bool {
+        guard !isCompleted, let date = item.effectiveDate else { return false }
+        let delta = date.timeIntervalSinceNow
+        return delta >= -1800 && delta <= 3600 * 48
+    }
+
     private var urgencyBadge: (text: String, color: Color) {
         guard let date = item.effectiveDate else {
             return ("Open / No Due Date", .secondary)
@@ -480,10 +896,10 @@ private struct DeadlineRowCard: View {
             return ("Due \(SharedFormatters.relative.localizedString(for: date, relativeTo: Date()))", .secondary)
         } else if delta <= 3600 * 48 {
             let hours = max(1, Int(delta / 3600))
-            return ("Due in \(hours)h", .orange)
+            return ("Due in \(hours)h", isCompleted ? .secondary : .orange)
         } else {
             let days = max(1, Int(delta / 86400))
-            return ("In \(days) days", .cyan)
+            return ("In \(days) days", isCompleted ? .secondary : .cyan)
         }
     }
 
@@ -493,14 +909,29 @@ private struct DeadlineRowCard: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 11) {
+            // Left Quick-Toggle Checkmark Button
+            Button(action: onToggleCompletion) {
+                ZStack {
+                    Circle()
+                        .fill(isCompleted ? Color.green.opacity(0.18) : Color.orange.opacity(0.12))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle.dotted")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(isCompleted ? Color.green : Color.orange)
+                }
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(isCompleted ? "Marked as Completed — click to mark as Needs Attention" : "Needs Attention — click to mark as Completed")
+
             ZStack {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(accent.opacity(0.16))
-                    .frame(width: 36, height: 36)
+                    .fill((isCompleted ? Color.green : accent).opacity(0.15))
+                    .frame(width: 34, height: 34)
                 Image(systemName: kindIcon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(accent)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isCompleted ? Color.green : accent)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -516,7 +947,8 @@ private struct DeadlineRowCard: View {
 
                     Text(item.title)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isCompleted ? .secondary : .primary)
+                        .strikethrough(isCompleted, color: .secondary.opacity(0.6))
                         .lineLimit(1)
                 }
 
@@ -539,17 +971,44 @@ private struct DeadlineRowCard: View {
 
             Spacer()
 
+            // Countdown / Relative Date Badge
             let badge = urgencyBadge
             Text(badge.text)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(badge.color)
-                .padding(.horizontal, 9)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(badge.color.opacity(0.12))
+                )
+
+            // Interactive Status Button: "Needs Attention" (Default) <-> "Completed"
+            Button(action: onToggleCompletion) {
+                HStack(spacing: 5) {
+                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                    Text(isCompleted ? "Completed" : "Needs Attention")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                }
+                .foregroundStyle(isCompleted ? Color.green : (isUrgent48h ? Color.orange : Color.amberAccent))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
                 .contentShape(Capsule(style: .continuous))
                 .background(
                     Capsule(style: .continuous)
-                        .fill(badge.color.opacity(0.14))
+                        .fill(isCompleted ? Color.green.opacity(0.16) : Color.orange.opacity(0.15))
                 )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            isCompleted ? Color.green.opacity(0.45) : Color.orange.opacity(0.40),
+                            lineWidth: 1
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .help(isCompleted ? "Click to switch back to Needs Attention" : "Click to mark as Completed")
 
             if let urlStr = item.webURL, let url = URL(string: urlStr) {
                 Button {
@@ -563,8 +1022,12 @@ private struct DeadlineRowCard: View {
                 .help("Open in Brightspace")
             }
         }
-        .liquidGlassCard(cornerRadius: 11, padding: 11, isInteractive: true)
+        .liquidGlassCard(cornerRadius: 11, padding: 10, isInteractive: true)
     }
+}
+
+private extension Color {
+    static let amberAccent = Color(red: 0.98, green: 0.62, blue: 0.15)
 }
 
 // MARK: - Section 2: Course Files & Announcements Browser View
@@ -1256,6 +1719,7 @@ private struct SidebarNavRow: View {
 private struct SidebarCourseRow: View {
     let code: String
     let subtitle: String
+    var completionBadge: String? = nil
     let color: Color
     let isSelected: Bool
     let action: () -> Void
@@ -1277,7 +1741,19 @@ private struct SidebarCourseRow: View {
                         .lineLimit(1)
                 }
 
-                Spacer()
+                Spacer(minLength: 4)
+
+                if let completionBadge {
+                    Text(completionBadge)
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(completionBadge == "100%" ? Color.green : color)
+                        .padding(.horizontal, 5.5)
+                        .padding(.vertical, 1.5)
+                        .background(
+                            Capsule()
+                                .fill((completionBadge == "100%" ? Color.green : color).opacity(0.14))
+                        )
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)

@@ -517,6 +517,129 @@ func testInstantStartupAndParallelSync() async {
     }
 }
 
+func testDeadlineCompletionAndCourseProgress() async {
+    await runSuite("9. Deadline Completion Toggles & Course Progress Engine") {
+        let now = Date()
+        let pastDate = now.addingTimeInterval(-3600 * 24 * 7)   // 7 days ago
+        let urgentDate = now.addingTimeInterval(3600 * 18)      // in 18 hours
+        let futureDate = now.addingTimeInterval(3600 * 24 * 10) // in 10 days
+
+        let pastLab = BrightspaceDeadlineItem(
+            id: "608738:quiz:1",
+            orgUnitId: "608738",
+            courseCode: "GNG1106",
+            title: "Lab 1",
+            kind: .quiz,
+            dueDate: pastDate
+        )
+        let upcomingQuiz = BrightspaceDeadlineItem(
+            id: "608738:quiz:2",
+            orgUnitId: "608738",
+            courseCode: "GNG1106",
+            title: "LECTURE18-ICE",
+            kind: .quiz,
+            dueDate: urgentDate
+        )
+        let upcomingExam = BrightspaceDeadlineItem(
+            id: "608738:syllabus:final",
+            orgUnitId: "608738",
+            courseCode: "GNG1106",
+            title: "Final Exam",
+            kind: .exam,
+            dueDate: futureDate
+        )
+
+        // Duplicate final exam across lab and lecture sections of CHM1311
+        let chmFinalLab = BrightspaceDeadlineItem(
+            id: "603871:syllabus:final",
+            orgUnitId: "603871",
+            courseCode: "CHM1311",
+            title: "Final Exam (Official Exam Period)",
+            kind: .exam,
+            dueDate: futureDate
+        )
+        let chmFinalLec = BrightspaceDeadlineItem(
+            id: "615426:syllabus:final",
+            orgUnitId: "615426",
+            courseCode: "CHM1311",
+            title: "Final Exam (Official Exam Period)",
+            kind: .exam,
+            dueDate: futureDate
+        )
+
+        // 1. Deduplication check
+        let deduped = deduplicateDeadlineItems([pastLab, upcomingQuiz, upcomingExam, chmFinalLab, chmFinalLec])
+        assertEqual(deduped.count, 4, "Duplicate CHM1311 final exam across Lab/Lec must be deduplicated to 1 item")
+
+        // 2. Default evaluation: past items default to Completed, upcoming items default to Needs Attention
+        assertTrue(
+            evaluateDeadlineCompleted(pastLab, completedIDs: [], needsAttentionIDs: [], now: now),
+            "Past deadline should default to Completed"
+        )
+        assertFalse(
+            evaluateDeadlineCompleted(upcomingQuiz, completedIDs: [], needsAttentionIDs: [], now: now),
+            "Upcoming quiz should default to Needs Attention (false)"
+        )
+        assertFalse(
+            evaluateDeadlineCompleted(upcomingExam, completedIDs: [], needsAttentionIDs: [], now: now),
+            "Upcoming exam should default to Needs Attention (false)"
+        )
+
+        // 3. Initial course progress for GNG1106 (1 past done, 2 upcoming needing attention = 33.33%)
+        let initialProgress = calculateSemesterProgress(
+            courses: ["GNG1106", "CHM1311"],
+            deadlines: [pastLab, upcomingQuiz, upcomingExam, chmFinalLab, chmFinalLec],
+            completedIDs: [],
+            needsAttentionIDs: [],
+            selectedCourseFilter: "ALL",
+            now: now
+        )
+        assertEqual(initialProgress.totalCompleted, 1)
+        assertEqual(initialProgress.totalNeedsAttention, 3)
+        assertEqual(initialProgress.totalDeliverables, 4)
+        assertEqual(initialProgress.urgentNeedsAttentionCount, 1, "LECTURE18-ICE is due within 48h and needs attention")
+
+        let gngInitial = initialProgress.courseSummaries.first(where: { $0.courseCode == "GNG1106" })
+        assertNotNil(gngInitial)
+        assertEqual(gngInitial?.completedCount, 1)
+        assertEqual(gngInitial?.needsAttentionCount, 2)
+        assertEqual(gngInitial?.totalCount, 3)
+
+        // 4. Mark upcomingQuiz (LECTURE18-ICE) as Completed early
+        let completedSet: Set<String> = [upcomingQuiz.id, upcomingQuiz.signatureKey]
+        assertTrue(
+            evaluateDeadlineCompleted(upcomingQuiz, completedIDs: completedSet, needsAttentionIDs: [], now: now),
+            "Upcoming quiz marked completed must evaluate to true"
+        )
+
+        let updatedProgress = calculateSemesterProgress(
+            courses: ["GNG1106", "CHM1311"],
+            deadlines: [pastLab, upcomingQuiz, upcomingExam, chmFinalLab, chmFinalLec],
+            completedIDs: completedSet,
+            needsAttentionIDs: [],
+            selectedCourseFilter: "ALL",
+            now: now
+        )
+        assertEqual(updatedProgress.totalCompleted, 2)
+        assertEqual(updatedProgress.totalNeedsAttention, 2)
+        assertEqual(updatedProgress.completedUpcomingCount, 1, "1 upcoming deliverable was completed early")
+        assertEqual(updatedProgress.urgentNeedsAttentionCount, 0, "Urgent 48h count drops to 0 after marking LECTURE18-ICE completed")
+        assertEqual(updatedProgress.overallPercentage, 50.0, "2 of 4 total deliverables completed = 50%")
+
+        let gngUpdated = updatedProgress.courseSummaries.first(where: { $0.courseCode == "GNG1106" })
+        assertEqual(gngUpdated?.completedCount, 2)
+        assertEqual(gngUpdated?.needsAttentionCount, 1)
+        assertEqual(gngUpdated?.nextDeadlineTitle, "Final Exam")
+
+        // 5. Override a past item back to Needs Attention
+        let attentionSet: Set<String> = [pastLab.id]
+        assertFalse(
+            evaluateDeadlineCompleted(pastLab, completedIDs: [], needsAttentionIDs: attentionSet, now: now),
+            "Past item overridden to Needs Attention must evaluate to false"
+        )
+    }
+}
+
 // MARK: - Test Runner Entry Point
 
 @main
@@ -537,6 +660,7 @@ struct TestRunnerMain {
         await testPersistentSyncStatePersistence()
         await testLiveSessionAndConnectivityDiagnostics()
         await testInstantStartupAndParallelSync()
+        await testDeadlineCompletionAndCourseProgress()
 
         let totalDuration = String(format: "%.3fs", Date().timeIntervalSince(startTime))
 

@@ -22,6 +22,78 @@ public enum WorkspaceSection: String, CaseIterable, Identifiable {
     }
 }
 
+public enum DeadlineStatusFilter: String, CaseIterable, Identifiable, Sendable {
+    case allUpcoming = "All Upcoming"
+    case needsAttention = "Needs Attention"
+    case completed = "Completed"
+    case fullSemester = "Full Semester"
+
+    public var id: String { rawValue }
+}
+
+public struct CourseProgressSummary: Identifiable, Equatable, Sendable {
+    public var id: String { courseCode }
+    public let courseCode: String
+    public let courseTitle: String
+    public let completedCount: Int
+    public let needsAttentionCount: Int
+    public let totalCount: Int
+    public let completionPercentage: Double
+    public let completedUpcomingCount: Int
+    public let nextDeadlineTitle: String?
+    public let nextDeadlineDate: Date?
+
+    public init(
+        courseCode: String,
+        courseTitle: String,
+        completedCount: Int,
+        needsAttentionCount: Int,
+        totalCount: Int,
+        completionPercentage: Double,
+        completedUpcomingCount: Int,
+        nextDeadlineTitle: String? = nil,
+        nextDeadlineDate: Date? = nil
+    ) {
+        self.courseCode = courseCode
+        self.courseTitle = courseTitle
+        self.completedCount = completedCount
+        self.needsAttentionCount = needsAttentionCount
+        self.totalCount = totalCount
+        self.completionPercentage = completionPercentage
+        self.completedUpcomingCount = completedUpcomingCount
+        self.nextDeadlineTitle = nextDeadlineTitle
+        self.nextDeadlineDate = nextDeadlineDate
+    }
+}
+
+public struct SemesterProgressSummary: Equatable, Sendable {
+    public let totalCompleted: Int
+    public let totalNeedsAttention: Int
+    public let totalDeliverables: Int
+    public let overallPercentage: Double
+    public let completedUpcomingCount: Int
+    public let urgentNeedsAttentionCount: Int
+    public let courseSummaries: [CourseProgressSummary]
+
+    public init(
+        totalCompleted: Int,
+        totalNeedsAttention: Int,
+        totalDeliverables: Int,
+        overallPercentage: Double,
+        completedUpcomingCount: Int,
+        urgentNeedsAttentionCount: Int,
+        courseSummaries: [CourseProgressSummary]
+    ) {
+        self.totalCompleted = totalCompleted
+        self.totalNeedsAttention = totalNeedsAttention
+        self.totalDeliverables = totalDeliverables
+        self.overallPercentage = overallPercentage
+        self.completedUpcomingCount = completedUpcomingCount
+        self.urgentNeedsAttentionCount = urgentNeedsAttentionCount
+        self.courseSummaries = courseSummaries
+    }
+}
+
 // MARK: - Main-Actor Observable Coordinator
 
 @MainActor
@@ -39,9 +111,22 @@ public final class AppViewModel: ObservableObject {
     @Published public var lastSyncDate: Date? = nil
 
     // Filter & Search States
-    @Published public var showPastDeadlines: Bool = false
+    @Published public var showPastDeadlines: Bool = false {
+        didSet {
+            if showPastDeadlines && selectedStatusFilter == .allUpcoming {
+                selectedStatusFilter = .fullSemester
+            } else if !showPastDeadlines && selectedStatusFilter == .fullSemester {
+                selectedStatusFilter = .allUpcoming
+            }
+        }
+    }
+    @Published public var selectedStatusFilter: DeadlineStatusFilter = .allUpcoming
     @Published public var selectedDeadlineKind: String = "ALL"
     @Published public var deadlineSearchQuery: String = ""
+
+    // Persisted User Deadline Completion Overrides
+    @Published public var completedDeadlineIDs: Set<String> = []
+    @Published public var needsAttentionDeadlineIDs: Set<String> = []
 
     @Published public var selectedFileCategory: String = "ALL"
     @Published public var fileSearchQuery: String = ""
@@ -81,6 +166,8 @@ public final class AppViewModel: ObservableObject {
 
     private let engine = BrightspaceSyncEngine()
     private let coursesStorageKey = "BrightspaceSync.CoursesList"
+    private let completedDeadlinesStorageKey = "BrightspaceSync.CompletedDeadlineIDs"
+    private let needsAttentionDeadlinesStorageKey = "BrightspaceSync.NeedsAttentionDeadlineIDs"
     private var warmupWebView: WKWebView?
 
     public init() {
@@ -92,6 +179,13 @@ public final class AppViewModel: ObservableObject {
         let savedCmd = UserDefaults.standard.string(forKey: "BrightspaceSync.DirectCommand") ?? ""
         self.directAutomationCommand = savedCmd.contains("notebook_ingest.sh") ? "" : savedCmd
         self.autoCloseAfterSync = UserDefaults.standard.object(forKey: "BrightspaceSync.AutoCloseAfterSync") as? Bool ?? false
+
+        if let savedCompleted = UserDefaults.standard.stringArray(forKey: completedDeadlinesStorageKey) {
+            self.completedDeadlineIDs = Set(savedCompleted)
+        }
+        if let savedAttention = UserDefaults.standard.stringArray(forKey: needsAttentionDeadlinesStorageKey) {
+            self.needsAttentionDeadlineIDs = Set(savedAttention)
+        }
 
         self.rootDirectoryPath = LocalFileManager.shared.resolveRootDirectoryURL().path(percentEncoded: false)
         self.driveMirrorPath = LocalFileManager.shared.resolveDriveMirrorDirectoryURL()?.path(percentEncoded: false) ?? ""
@@ -246,11 +340,59 @@ public final class AppViewModel: ObservableObject {
         return nil
     }
 
+    // MARK: - Deadline Completion & Course Progress Engine
+
+    public func isDeadlineCompleted(_ item: BrightspaceDeadlineItem, now: Date = Date()) -> Bool {
+        evaluateDeadlineCompleted(
+            item,
+            completedIDs: completedDeadlineIDs,
+            needsAttentionIDs: needsAttentionDeadlineIDs,
+            now: now
+        )
+    }
+
+    public func toggleDeadlineCompletion(_ item: BrightspaceDeadlineItem, now: Date = Date()) {
+        let currentlyDone = isDeadlineCompleted(item, now: now)
+        setDeadlineCompleted(item, completed: !currentlyDone)
+    }
+
+    public func setDeadlineCompleted(_ item: BrightspaceDeadlineItem, completed: Bool) {
+        let keys = [item.id, item.signatureKey]
+        if completed {
+            for k in keys {
+                completedDeadlineIDs.insert(k)
+                needsAttentionDeadlineIDs.remove(k)
+            }
+        } else {
+            for k in keys {
+                completedDeadlineIDs.remove(k)
+                needsAttentionDeadlineIDs.insert(k)
+            }
+        }
+        persistDeadlineCompletionOverrides()
+    }
+
+    private func persistDeadlineCompletionOverrides() {
+        UserDefaults.standard.set(Array(completedDeadlineIDs), forKey: completedDeadlinesStorageKey)
+        UserDefaults.standard.set(Array(needsAttentionDeadlineIDs), forKey: needsAttentionDeadlinesStorageKey)
+    }
+
+    /// Deduplicates deadlines sharing the exact same courseCode + kind + title across lab/lecture sections
+    public var deduplicatedDeadlines: [BrightspaceDeadlineItem] {
+        deduplicateDeadlineItems(deadlines)
+    }
+
     // MARK: - Filtered Collections for Each Workspace Section
 
     public var upcomingDeadlinesCount: Int {
-        let cutoff = Date().addingTimeInterval(-3600 * 6)
-        return deadlines.filter { item in
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-3600 * 12)
+        return deduplicatedDeadlines.filter { item in
+            let done = isDeadlineCompleted(item, now: now)
+            if done { return false }
+            if needsAttentionDeadlineIDs.contains(item.id) || needsAttentionDeadlineIDs.contains(item.signatureKey) {
+                return true
+            }
             guard let d = item.effectiveDate else { return false }
             return d >= cutoff
         }.count
@@ -259,17 +401,36 @@ public final class AppViewModel: ObservableObject {
     public var urgentDeadlinesWithin48Hours: [BrightspaceDeadlineItem] {
         let now = Date()
         let limit = now.addingTimeInterval(3600 * 48)
-        return deadlines
+        return deduplicatedDeadlines
             .filter { item in
+                guard !isDeadlineCompleted(item, now: now) else { return false }
                 guard let d = item.effectiveDate else { return false }
                 return d >= now.addingTimeInterval(-1800) && d <= limit
             }
             .sorted { ($0.effectiveDate ?? .distantFuture) < ($1.effectiveDate ?? .distantFuture) }
     }
 
+    public var semesterProgressSummary: SemesterProgressSummary {
+        var titleMap: [String: String] = [:]
+        for c in courses where titleMap[c.courseCode] == nil {
+            titleMap[c.courseCode] = c.courseTitle
+        }
+        return calculateSemesterProgress(
+            courses: uniqueEnabledCourseCodes,
+            courseTitles: titleMap,
+            deadlines: deduplicatedDeadlines,
+            grades: grades,
+            completedIDs: completedDeadlineIDs,
+            needsAttentionIDs: needsAttentionDeadlineIDs,
+            selectedCourseFilter: selectedCourseFilter
+        )
+    }
+
     public var filteredDeadlines: [BrightspaceDeadlineItem] {
         let now = Date()
-        return deadlines
+        let upcomingCutoff = now.addingTimeInterval(-3600 * 12)
+
+        return deduplicatedDeadlines
             .filter { item in
                 if selectedCourseFilter != "ALL" && item.courseCode != selectedCourseFilter {
                     return false
@@ -277,23 +438,49 @@ public final class AppViewModel: ObservableObject {
                 if selectedDeadlineKind != "ALL" && item.kind.rawValue != selectedDeadlineKind {
                     return false
                 }
-                if !showPastDeadlines {
+
+                let isDone = isDeadlineCompleted(item, now: now)
+                let isUpcomingWindow: Bool = {
                     if let d = item.effectiveDate {
-                        if d < now.addingTimeInterval(-3600 * 12) { return false }
-                    } else {
-                        return false
+                        return d >= upcomingCutoff
+                    }
+                    return false
+                }()
+
+                if showPastDeadlines || selectedStatusFilter == .fullSemester {
+                    // Full semester history: include everything matching course & type
+                } else {
+                    switch selectedStatusFilter {
+                    case .allUpcoming:
+                        // Show all upcoming items (both Needs Attention and ones marked Completed early),
+                        // plus any past/undated item explicitly flagged as Needs Attention
+                        if !isUpcomingWindow && isDone {
+                            return false
+                        }
+                    case .needsAttention:
+                        if isDone { return false }
+                    case .completed:
+                        if !isDone { return false }
+                    case .fullSemester:
+                        break
                     }
                 }
+
                 if !deadlineSearchQuery.isEmpty {
                     let q = deadlineSearchQuery.lowercased()
-                    return item.title.lowercased().contains(q) || item.courseCode.lowercased().contains(q)
+                    return item.title.lowercased().contains(q)
+                        || item.courseCode.lowercased().contains(q)
+                        || item.details.lowercased().contains(q)
                 }
                 return true
             }
             .sorted { a, b in
+                let descendingOrder = showPastDeadlines
+                    || selectedStatusFilter == .completed
+                    || selectedStatusFilter == .fullSemester
                 switch (a.effectiveDate, b.effectiveDate) {
                 case let (d1?, d2?):
-                    return showPastDeadlines ? (d1 > d2) : (d1 < d2)
+                    return descendingOrder ? (d1 > d2) : (d1 < d2)
                 case (_?, nil):
                     return true
                 case (nil, _?):
@@ -777,5 +964,177 @@ public func calculateCourseStanding(courseCode: String, items: [BrightspaceGrade
         gradePoint10: gradePoint10(for: pct),
         gradePoint4: gradePoint4(for: pct),
         isSatisfactoryOnly: isSOnly
+    )
+}
+
+// MARK: - Pure Deadline Completion & Course Progress Helpers
+
+/// Deduplicates deadlines sharing the exact same (courseCode, kind, title) across lab/lecture sections
+public func deduplicateDeadlineItems(_ items: [BrightspaceDeadlineItem]) -> [BrightspaceDeadlineItem] {
+    var seen = Set<String>()
+    var result: [BrightspaceDeadlineItem] = []
+    for item in items {
+        let key = item.signatureKey
+        if !seen.contains(key) {
+            seen.insert(key)
+            result.append(item)
+        }
+    }
+    return result
+}
+
+/// Evaluates whether a deadline item is considered Completed vs Needs Attention (default for upcoming items)
+public func evaluateDeadlineCompleted(
+    _ item: BrightspaceDeadlineItem,
+    completedIDs: Set<String>,
+    needsAttentionIDs: Set<String>,
+    now: Date = Date()
+) -> Bool {
+    if completedIDs.contains(item.id) || completedIDs.contains(item.signatureKey) {
+        return true
+    }
+    if needsAttentionIDs.contains(item.id) || needsAttentionIDs.contains(item.signatureKey) {
+        return false
+    }
+    // Default rule:
+    // Upcoming items (due within last 6 hours or in the future) default to FALSE ("Needs Attention").
+    // Past items (already elapsed) or archival undated items default to TRUE ("Completed").
+    if let d = item.effectiveDate {
+        return d < now.addingTimeInterval(-3600 * 6)
+    }
+    return true
+}
+
+/// Calculates per-course and overall semester completion progress
+public func calculateSemesterProgress(
+    courses: [String],
+    courseTitles: [String: String] = [:],
+    deadlines: [BrightspaceDeadlineItem],
+    grades: [BrightspaceGradeItem] = [],
+    completedIDs: Set<String>,
+    needsAttentionIDs: Set<String>,
+    selectedCourseFilter: String = "ALL",
+    now: Date = Date()
+) -> SemesterProgressSummary {
+    let uniqueDeadlines = deduplicateDeadlineItems(deadlines)
+    var allCodes = courses
+    for d in uniqueDeadlines where !allCodes.contains(d.courseCode) {
+        allCodes.append(d.courseCode)
+    }
+    for g in grades where !allCodes.contains(g.courseCode) {
+        allCodes.append(g.courseCode)
+    }
+
+    let upcomingCutoff = now.addingTimeInterval(-3600 * 6)
+    let urgentLimit = now.addingTimeInterval(3600 * 48)
+    var summaries: [CourseProgressSummary] = []
+
+    for code in allCodes {
+        let courseDeadlines = uniqueDeadlines.filter { $0.courseCode == code }
+        let courseGrades = grades.filter { $0.courseCode == code && !$0.isCategory }
+
+        var completedCount = 0
+        var needsAttentionCount = 0
+        var completedUpcoming = 0
+        var pendingWithDates: [BrightspaceDeadlineItem] = []
+
+        for item in courseDeadlines {
+            let isDone = evaluateDeadlineCompleted(
+                item,
+                completedIDs: completedIDs,
+                needsAttentionIDs: needsAttentionIDs,
+                now: now
+            )
+            if isDone {
+                completedCount += 1
+                if let d = item.effectiveDate, d >= upcomingCutoff {
+                    completedUpcoming += 1
+                }
+            } else {
+                needsAttentionCount += 1
+                pendingWithDates.append(item)
+            }
+        }
+
+        // For courses using external homework portals (e.g. MAT1320 Möbius) that have < 5 Brightspace deadlines,
+        // fold in non-overlapping graded assessments from the gradebook so course progress reflects all completed work.
+        if courseDeadlines.count < 5 && !courseGrades.isEmpty {
+            let existingTitles = Set(courseDeadlines.map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            for g in courseGrades {
+                let norm = g.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let overlaps = existingTitles.contains { $0.contains(norm) || norm.contains($0) }
+                if !overlaps {
+                    completedCount += 1
+                }
+            }
+        }
+
+        let total = completedCount + needsAttentionCount
+        guard total > 0 else { continue }
+
+        let pct = (Double(completedCount) / Double(total)) * 100.0
+        let sortedPending = pendingWithDates.sorted {
+            ($0.effectiveDate ?? .distantFuture) < ($1.effectiveDate ?? .distantFuture)
+        }
+        let nextItem = sortedPending.first
+
+        summaries.append(
+            CourseProgressSummary(
+                courseCode: code,
+                courseTitle: courseTitles[code] ?? code,
+                completedCount: completedCount,
+                needsAttentionCount: needsAttentionCount,
+                totalCount: total,
+                completionPercentage: pct,
+                completedUpcomingCount: completedUpcoming,
+                nextDeadlineTitle: nextItem?.title,
+                nextDeadlineDate: nextItem?.effectiveDate
+            )
+        )
+    }
+
+    // Sort courses: courses with items needing attention first (most active first), then by courseCode
+    summaries.sort { a, b in
+        if (a.needsAttentionCount > 0) != (b.needsAttentionCount > 0) {
+            return a.needsAttentionCount > 0
+        }
+        if a.needsAttentionCount != b.needsAttentionCount {
+            return a.needsAttentionCount > b.needsAttentionCount
+        }
+        return a.courseCode < b.courseCode
+    }
+
+    let activeScope = selectedCourseFilter == "ALL"
+        ? summaries
+        : summaries.filter { $0.courseCode == selectedCourseFilter }
+
+    let totalDone = activeScope.map(\.completedCount).reduce(0, +)
+    let totalPending = activeScope.map(\.needsAttentionCount).reduce(0, +)
+    let totalAll = totalDone + totalPending
+    let overallPct = totalAll > 0 ? (Double(totalDone) / Double(totalAll)) * 100.0 : 100.0
+    let earlyDone = activeScope.map(\.completedUpcomingCount).reduce(0, +)
+
+    let urgentPending = uniqueDeadlines.filter { item in
+        if selectedCourseFilter != "ALL" && item.courseCode != selectedCourseFilter {
+            return false
+        }
+        guard !evaluateDeadlineCompleted(
+            item,
+            completedIDs: completedIDs,
+            needsAttentionIDs: needsAttentionIDs,
+            now: now
+        ) else { return false }
+        guard let d = item.effectiveDate else { return false }
+        return d >= now.addingTimeInterval(-1800) && d <= urgentLimit
+    }.count
+
+    return SemesterProgressSummary(
+        totalCompleted: totalDone,
+        totalNeedsAttention: totalPending,
+        totalDeliverables: totalAll,
+        overallPercentage: overallPct,
+        completedUpcomingCount: earlyDone,
+        urgentNeedsAttentionCount: urgentPending,
+        courseSummaries: summaries
     )
 }
