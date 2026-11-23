@@ -93,6 +93,21 @@ public struct BrightspaceSyncApp: App {
 
 public struct BrightspaceDesktopWorkspaceView: View {
     @ObservedObject var viewModel: AppViewModel
+    @AppStorage("BrightspaceSync.GlassPreset") private var glassPresetRaw: String = LiquidGlassPreset.tahoeClear.rawValue
+
+    private var currentGlassPreset: LiquidGlassPreset {
+        LiquidGlassPreset(rawValue: glassPresetRaw) ?? .tahoeClear
+    }
+
+    private func cycleGlassPreset() {
+        let all = LiquidGlassPreset.allCases
+        if let idx = all.firstIndex(of: currentGlassPreset) {
+            let next = all[(idx + 1) % all.count]
+            glassPresetRaw = next.rawValue
+        } else {
+            glassPresetRaw = LiquidGlassPreset.tahoeClear.rawValue
+        }
+    }
 
     public var body: some View {
         HStack(spacing: 0) {
@@ -265,15 +280,32 @@ public struct BrightspaceDesktopWorkspaceView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
         }
-        .background(Color.primary.opacity(0.025))
+        .background(
+            ZStack {
+                VisualEffectGlassView(
+                    material: .sidebar,
+                    blendingMode: .behindWindow,
+                    state: .active
+                )
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.06),
+                        Color.clear,
+                        Color.cyan.opacity(0.025)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
     }
 
     private var workspaceTopHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(viewModel.selectedSection.rawValue)
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
 
                     if viewModel.selectedCourseFilter != "ALL" {
@@ -292,6 +324,20 @@ public struct BrightspaceDesktopWorkspaceView: View {
             Spacer()
 
             GlowStatusBadge(state: viewModel.syncState)
+
+            // 1-Click macOS 26 Tahoe Liquid Glass Mode Selector
+            Button {
+                cycleGlassPreset()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: currentGlassPreset.icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                    Text(currentGlassPreset.rawValue)
+                }
+            }
+            .buttonStyle(GlassActionButtonStyle(prominent: false))
+            .help("Cycle macOS 26 Tahoe Liquid Glass refraction theme (Tahoe Clear • Tahoe Frost • Prism Tint)")
 
             Button {
                 viewModel.isWebLoginSheetPresented = true
@@ -319,6 +365,16 @@ public struct BrightspaceDesktopWorkspaceView: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 12)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.06),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 
     private var authRequiredBanner: some View {
@@ -637,7 +693,7 @@ private struct SemesterProgressHeroCard: View {
                                 .foregroundStyle(.green)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.green.opacity(0.15)))
+                                .liquidGlassPill(tint: .green, isSelected: true)
                         }
                     }
 
@@ -649,32 +705,29 @@ private struct SemesterProgressHeroCard: View {
 
                 Spacer()
 
-                // Interactive Summary Counters
+                // Interactive Summary Counters (Liquid Glass Lozenges)
                 HStack(spacing: 8) {
                     Button {
                         onSelectStatus(selectedStatusFilter == .needsAttention ? .allUpcoming : .needsAttention)
                     } label: {
-                        HStack(spacing: 5) {
+                        HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.circle.fill")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 12, weight: .bold))
                             VStack(alignment: .leading, spacing: 0) {
                                 Text("\(summary.totalNeedsAttention)")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
                                 Text("Need Attention")
                                     .font(.system(size: 9.5, weight: .medium))
                             }
                         }
                         .foregroundStyle(summary.totalNeedsAttention > 0 ? Color.orange : Color.secondary)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 11)
                         .padding(.vertical, 6)
-                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Color.orange.opacity(selectedStatusFilter == .needsAttention ? 0.22 : 0.10))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(Color.orange.opacity(selectedStatusFilter == .needsAttention ? 0.55 : 0.22), lineWidth: 1)
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .liquidGlassPill(
+                            tint: .orange,
+                            isSelected: selectedStatusFilter == .needsAttention || summary.totalNeedsAttention > 0,
+                            cornerRadius: 10
                         )
                     }
                     .buttonStyle(.plain)
@@ -683,27 +736,24 @@ private struct SemesterProgressHeroCard: View {
                     Button {
                         onSelectStatus(selectedStatusFilter == .completed ? .allUpcoming : .completed)
                     } label: {
-                        HStack(spacing: 5) {
+                        HStack(spacing: 6) {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 12, weight: .bold))
                             VStack(alignment: .leading, spacing: 0) {
                                 Text("\(summary.totalCompleted)")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
                                 Text("Completed")
                                     .font(.system(size: 9.5, weight: .medium))
                             }
                         }
                         .foregroundStyle(Color.green)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 11)
                         .padding(.vertical, 6)
-                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Color.green.opacity(selectedStatusFilter == .completed ? 0.22 : 0.10))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(Color.green.opacity(selectedStatusFilter == .completed ? 0.55 : 0.22), lineWidth: 1)
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .liquidGlassPill(
+                            tint: .green,
+                            isSelected: true,
+                            cornerRadius: 10
                         )
                     }
                     .buttonStyle(.plain)
@@ -711,23 +761,12 @@ private struct SemesterProgressHeroCard: View {
                 }
             }
 
-            // Full-Width Overall Progress Bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [progressColor.opacity(0.85), progressColor],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: max(6, geo.size.width * CGFloat(min(100, max(0, summary.overallPercentage)) / 100.0)))
-                }
-            }
-            .frame(height: 7)
+            // Full-Width Liquid Glass Tube Progress Bar
+            LiquidGlassProgressBar(
+                percentage: summary.overallPercentage,
+                tint: progressColor,
+                height: 8
+            )
 
             // Per-Course Completion Cards Row ("How much of each course you completed")
             if !summary.courseSummaries.isEmpty {
@@ -747,7 +786,7 @@ private struct SemesterProgressHeroCard: View {
                 }
             }
         }
-        .liquidGlassCard(cornerRadius: 13, padding: 13, isInteractive: false)
+        .liquidGlassCard(cornerRadius: 14, padding: 13, isInteractive: false, tint: progressColor)
     }
 }
 
@@ -766,7 +805,7 @@ private struct CourseCompletionCard: View {
 
     var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     CourseTagBadge(courseCode: course.courseCode, accent: accent)
                     Spacer()
@@ -775,17 +814,12 @@ private struct CourseCompletionCard: View {
                         .foregroundStyle(course.needsAttentionCount == 0 ? Color.green : Color.primary)
                 }
 
-                // Mini Course Progress Bar
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule(style: .continuous)
-                            .fill(Color.primary.opacity(0.08))
-                        Capsule(style: .continuous)
-                            .fill(barColor)
-                            .frame(width: max(4, geo.size.width * CGFloat(min(100, max(0, course.completionPercentage)) / 100.0)))
-                    }
-                }
-                .frame(height: 5)
+                // Mini Course Liquid Glass Progress Bar
+                LiquidGlassProgressBar(
+                    percentage: course.completionPercentage,
+                    tint: barColor,
+                    height: 5.5
+                )
 
                 HStack(spacing: 4) {
                     Text("\(course.completedCount)/\(course.totalCount) done")
@@ -808,20 +842,10 @@ private struct CourseCompletionCard: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(width: 156, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? accent.opacity(0.16) : Color.primary.opacity(0.035))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(
-                        isSelected ? accent.opacity(0.55) : Color.primary.opacity(0.08),
-                        lineWidth: 1
-                    )
-            )
+            .padding(.vertical, 8.5)
+            .frame(width: 158, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10.5, style: .continuous))
+            .liquidGlassPill(tint: barColor, isSelected: isSelected, cornerRadius: 10.5)
         }
         .buttonStyle(.plain)
         .help("You completed \(String(format: "%.0f%%", course.completionPercentage)) of \(course.courseCode) (\(course.completedCount) of \(course.totalCount) items). Click to filter by \(course.courseCode).")
@@ -841,23 +865,13 @@ private struct StatusFilterPill: View {
                 Image(systemName: icon)
                     .font(.system(size: 10, weight: .bold))
                 Text(title)
-                    .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+                    .font(.system(size: 11, weight: isSelected ? .bold : .medium, design: .rounded))
             }
             .foregroundStyle(isSelected ? accent : Color.secondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4.5)
             .contentShape(Capsule(style: .continuous))
-            .background(
-                Capsule(style: .continuous)
-                    .fill(isSelected ? accent.opacity(0.18) : Color.primary.opacity(0.05))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .strokeBorder(
-                        isSelected ? accent.opacity(0.48) : Color.primary.opacity(0.08),
-                        lineWidth: 1
-                    )
-            )
+            .liquidGlassPill(tint: accent, isSelected: isSelected)
         }
         .buttonStyle(.plain)
     }
@@ -910,29 +924,27 @@ private struct DeadlineRowCard: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            // Left Quick-Toggle Checkmark Button
+            // Left Quick-Toggle Liquid Glass Checkmark Droplet
             Button(action: onToggleCompletion) {
                 ZStack {
-                    Circle()
-                        .fill(isCompleted ? Color.green.opacity(0.18) : Color.orange.opacity(0.12))
-                        .frame(width: 28, height: 28)
                     Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(isCompleted ? Color.green : Color.orange)
                 }
+                .frame(width: 28, height: 28)
                 .contentShape(Circle())
+                .liquidGlassPill(tint: isCompleted ? .green : .orange, isSelected: true)
             }
             .buttonStyle(.plain)
             .help(isCompleted ? "Marked as Completed — click to mark as Needs Attention" : "Needs Attention — click to mark as Completed")
 
             ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill((isCompleted ? Color.green : accent).opacity(0.15))
-                    .frame(width: 34, height: 34)
                 Image(systemName: kindIcon)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(isCompleted ? Color.green : accent)
             }
+            .frame(width: 34, height: 34)
+            .liquidGlassPill(tint: isCompleted ? .green : accent, isSelected: true, cornerRadius: 9)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
@@ -941,9 +953,9 @@ private struct DeadlineRowCard: View {
                     Text(item.kind.rawValue.uppercased())
                         .font(.system(size: 9.5, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 6.5)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                        .liquidGlassPill(tint: .secondary, isSelected: false)
 
                     Text(item.title)
                         .font(.system(size: 13, weight: .semibold))
@@ -971,19 +983,16 @@ private struct DeadlineRowCard: View {
 
             Spacer()
 
-            // Countdown / Relative Date Badge
+            // Countdown / Relative Date Liquid Glass Badge
             let badge = urgencyBadge
             Text(badge.text)
                 .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(badge.color)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(badge.color.opacity(0.12))
-                )
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4.5)
+                .liquidGlassPill(tint: badge.color, isSelected: !isCompleted && badge.color != .secondary)
 
-            // Interactive Status Button: "Needs Attention" (Default) <-> "Completed"
+            // Interactive Liquid Glass Status Button: "Needs Attention" (Default) <-> "Completed"
             Button(action: onToggleCompletion) {
                 HStack(spacing: 5) {
                     Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
@@ -992,20 +1001,10 @@ private struct DeadlineRowCard: View {
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                 }
                 .foregroundStyle(isCompleted ? Color.green : (isUrgent48h ? Color.orange : Color.amberAccent))
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 10.5)
                 .padding(.vertical, 5)
                 .contentShape(Capsule(style: .continuous))
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(isCompleted ? Color.green.opacity(0.16) : Color.orange.opacity(0.15))
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .strokeBorder(
-                            isCompleted ? Color.green.opacity(0.45) : Color.orange.opacity(0.40),
-                            lineWidth: 1
-                        )
-                )
+                .liquidGlassPill(tint: isCompleted ? .green : .orange, isSelected: true)
             }
             .buttonStyle(.plain)
             .help(isCompleted ? "Click to switch back to Needs Attention" : "Click to mark as Completed")
@@ -1022,7 +1021,12 @@ private struct DeadlineRowCard: View {
                 .help("Open in Brightspace")
             }
         }
-        .liquidGlassCard(cornerRadius: 11, padding: 10, isInteractive: true)
+        .liquidGlassCard(
+            cornerRadius: 12,
+            padding: 10,
+            isInteractive: true,
+            tint: isCompleted ? .green : (isUrgent48h ? .orange : accent)
+        )
     }
 }
 
@@ -1401,27 +1405,13 @@ private struct CGPAHeroCard: View {
                 }
             }
 
-            // Visual Progress Meter on 10.0 Scale
+            // Visual Progress Meter on 10.0 Scale (Liquid Glass Tube)
             VStack(alignment: .leading, spacing: 5) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(height: 8)
-
-                        let fraction = max(0.0, min(1.0, summary.cgpa10 / 10.0))
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.cyan, summary.standingColor],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: max(8, geo.size.width * fraction), height: 8)
-                    }
-                }
-                .frame(height: 8)
+                LiquidGlassProgressBar(
+                    percentage: max(0.0, min(100.0, summary.cgpa10 * 10.0)),
+                    tint: summary.standingColor,
+                    height: 8.5
+                )
 
                 HStack {
                     Text("0.0 (F)")
@@ -1443,9 +1433,10 @@ private struct CGPAHeroCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(summary.courseStandings) { standing in
+                            let cAccent = courseColor(for: standing.courseCode)
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(courseColor(for: standing.courseCode))
+                                    .fill(cAccent)
                                     .frame(width: 6, height: 6)
 
                                 Text(standing.courseCode)
@@ -1466,16 +1457,9 @@ private struct CGPAHeroCard: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            .padding(.horizontal, 9)
+                            .padding(.horizontal, 9.5)
                             .padding(.vertical, 5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(Color.primary.opacity(0.04))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
-                            )
+                            .liquidGlassPill(tint: cAccent, isSelected: false, cornerRadius: 8)
                         }
                     }
                 }
@@ -1510,7 +1494,7 @@ private struct CGPAHeroCard: View {
                 }
             }
         }
-        .liquidGlassCard(cornerRadius: 14, padding: 16, isInteractive: false)
+        .liquidGlassCard(cornerRadius: 14, padding: 16, isInteractive: false, tint: summary.standingColor)
     }
 }
 
@@ -1570,7 +1554,7 @@ private struct CourseGradeSummaryCard: View {
             }
         }
         .frame(width: 180)
-        .liquidGlassCard(cornerRadius: 12, padding: 12, isInteractive: false)
+        .liquidGlassCard(cornerRadius: 12, padding: 12, isInteractive: false, tint: accent)
     }
 }
 
@@ -1614,9 +1598,9 @@ private struct GradeItemRowCard: View {
                         Text("CATEGORY SUMMARY")
                             .font(.system(size: 9, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cyan)
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, 6)
                             .padding(.vertical, 1.5)
-                            .background(Capsule().fill(Color.cyan.opacity(0.14)))
+                            .liquidGlassPill(tint: .cyan, isSelected: true)
                     }
                 }
 
@@ -1630,18 +1614,14 @@ private struct GradeItemRowCard: View {
 
             Spacer()
 
-            // Progress Bar
+            // Liquid Glass Progress Bar
             if item.percentage != nil {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                        Capsule()
-                            .fill(gradeColor(for: pct))
-                            .frame(width: max(4, geo.size.width * CGFloat(min(100, max(0, pct)) / 100.0)))
-                    }
-                }
-                .frame(width: 85, height: 6)
+                LiquidGlassProgressBar(
+                    percentage: pct,
+                    tint: gradeColor(for: pct),
+                    height: 6
+                )
+                .frame(width: 85)
             }
 
             if !scoreText.isEmpty {
@@ -1656,16 +1636,14 @@ private struct GradeItemRowCard: View {
                 .foregroundStyle(gradeColor(for: pct))
                 .frame(width: 44, alignment: .center)
                 .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(gradeColor(for: pct).opacity(0.14))
-                )
+                .liquidGlassPill(tint: gradeColor(for: pct), isSelected: true, cornerRadius: 6)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, item.isCategory ? 8 : 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(item.isCategory ? Color.cyan.opacity(0.07) : Color.primary.opacity(0.025))
+        .liquidGlassPill(
+            tint: item.isCategory ? .cyan : gradeColor(for: pct),
+            isSelected: item.isCategory,
+            cornerRadius: 8.5
         )
     }
 }
@@ -1689,7 +1667,7 @@ private struct SidebarNavRow: View {
                     .frame(width: 18)
 
                 Text(title)
-                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium, design: .rounded))
                     .foregroundStyle(isSelected ? Color.primary : Color.secondary)
 
                 Spacer()
@@ -1698,18 +1676,22 @@ private struct SidebarNavRow: View {
                     Text(badge)
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(badgeColor)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 6.5)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(badgeColor.opacity(0.16)))
+                        .liquidGlassPill(tint: badgeColor, isSelected: true)
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                Group {
+                    if isSelected {
+                        Color.clear
+                            .liquidGlassPill(tint: .cyan, isSelected: true, cornerRadius: 9)
+                    }
+                }
             )
         }
         .buttonStyle(.plain)
@@ -1730,10 +1712,11 @@ private struct SidebarCourseRow: View {
                 Circle()
                     .fill(color)
                     .frame(width: 7, height: 7)
+                    .shadow(color: color.opacity(0.6), radius: 3, x: 0, y: 0)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(code)
-                        .font(.system(size: 11.5, weight: isSelected ? .bold : .medium))
+                        .font(.system(size: 11.5, weight: isSelected ? .bold : .medium, design: .rounded))
                         .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                     Text(subtitle)
                         .font(.system(size: 9.5))
@@ -1744,24 +1727,26 @@ private struct SidebarCourseRow: View {
                 Spacer(minLength: 4)
 
                 if let completionBadge {
+                    let isFull = completionBadge == "100%"
                     Text(completionBadge)
                         .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(completionBadge == "100%" ? Color.green : color)
-                        .padding(.horizontal, 5.5)
+                        .foregroundStyle(isFull ? Color.green : color)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 1.5)
-                        .background(
-                            Capsule()
-                                .fill((completionBadge == "100%" ? Color.green : color).opacity(0.14))
-                        )
+                        .liquidGlassPill(tint: isFull ? .green : color, isSelected: isSelected || isFull)
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.vertical, 5.5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isSelected ? color.opacity(0.15) : Color.clear)
+                Group {
+                    if isSelected {
+                        Color.clear
+                            .liquidGlassPill(tint: color, isSelected: true, cornerRadius: 8)
+                    }
+                }
             )
         }
         .buttonStyle(.plain)
@@ -1849,22 +1834,12 @@ private struct FilterChip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                .font(.system(size: 11, weight: isSelected ? .bold : .medium, design: .rounded))
                 .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4.5)
                 .contentShape(Capsule(style: .continuous))
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.05))
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .strokeBorder(
-                            isSelected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.08),
-                            lineWidth: 1
-                        )
-                )
+                .liquidGlassPill(tint: .cyan, isSelected: isSelected)
         }
         .buttonStyle(.plain)
     }
